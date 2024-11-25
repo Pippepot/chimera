@@ -9,6 +9,7 @@ Syntax is flexible and mostly too wild.
 
 # Features
 In Chimera, the only way to produce output is through the ```print``` definition:
+
 `
 print 1 + 2
 `
