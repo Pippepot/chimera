@@ -3,37 +3,34 @@
     CHIMERA
   </h1>
 </div>
-The Chimera language may not be all that useful but it is definitely intersting.
+The Chimera language may not be all that useful, but it is definitely interesting.
 
-Syntax is flexible and sometimes too wild.
+Syntax is flexible and mostly too wild.
 
 # Features
-In Chimera, the only way to produce output is through the ```print``` definition
-```
+In Chimera, the only way to produce output is through the ```print``` definition:
+`
 print 1 + 2
-```
+`
 
 # Questionable Features
-You can make definitions with the ```define``` keyword.
-Definitions are like functions, only more flexible syntax-wise.
+You can create definitions using the `define` keyword. Definitions are similar to functions but have more flexible syntax.
 
-Here is one way to define ```add```.
+Here’s one way to define `add`:
 ```
 define add(a:int, b:int) -> int
   return a + b
 
 print add(1, 2)
 ```
-But the parenthesies are not necessary. And neither is the comma.
+However, parentheses are optional, and so is the comma:
 ```
 define add a:int b:int -> int
   return a + b
 
 print add 1 2
 ```
-Furthermore, the definition does not have to start with a name. And the name can be almost anything!
-
-(including no name, but don't do that)
+Furthermore, the definition doesn’t have to start with a name, and the name can be almost anything — even no name at all (but don’t do that):
 ```
 define a:int $ b:int -> int
   return a + b
@@ -41,12 +38,12 @@ define a:int $ b:int -> int
 print 1 $ 2
 ```
 # Bad Features
-Chimera obviously follows operator precedence.
+Chimera follows standard operator precedence:
 ```
 print 1 + 2 * 3
 => 7
 ```
-But it is not obvious that it has to.
+But it doesn’t have to:
 ```
 precedence * = -1
 
