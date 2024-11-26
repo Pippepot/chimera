@@ -155,9 +155,12 @@ class Parser:
         self.precedence_patterns[self.min_precedence_level] = PatternMatcher(lowest_precedence)
 
     def precedence_pass(self, symbols: List[Symbol], pattern:PatternMatcher, variables:Dict[str, Symbol], precedence_level:int):
-        for i in reversed(range(len(symbols))):
+        i = 0
+        while i < len(symbols):
             success, length, rewrite = pattern.rewrite(symbols[i:], variables)
-            if not success: continue
+            if not success:
+                i += 1
+                continue
             if rewrite is None:
                 del symbols[i:i+length]
                 continue
@@ -166,6 +169,7 @@ class Parser:
             rewrite.sources = tuple([contender for contender in sources if isinstance(contender.id, Ops)])
             del symbols[i:i+length]
             symbols.insert(i, rewrite)
+            i += 1
                 
 
     def parse_ast(self, tokens: List[Symbol], variables:Dict[str, Symbol]={}, max_precedence_level=100) -> List[Symbol]:
@@ -185,7 +189,7 @@ def get_children_dfs(sym:Symbol, children:Dict[Symbol, List[Symbol]]):
 
 def linearize(ast:List[Symbol]) -> List[Symbol]:
     children:Dict[Symbol, List[Symbol]] = {}
-    for node in ast: get_children_dfs(node, children)
+    for node in reversed(ast): get_children_dfs(node, children)
     return list(reversed(children.keys()))
 
 op_patterns: Dict = {
