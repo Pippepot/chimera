@@ -2,9 +2,7 @@ from parser import tokenize, Parser, linearize, render
 from compiler import compile
 
 code = """
-a:int = 3
-print 2 * a - 2 / 7.1
-print a + 3
+print 2* 2- 1
 """
 
 def main():

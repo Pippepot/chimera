@@ -11,57 +11,32 @@ class FastEnum(IntEnum):
   def _generate_next_value_(_, __, ___, last_values): return 1 + max([0, *last_values, *[max(c) for c in FastEnum.__subclasses__()]])
 
 class Token(FastEnum):
-    CONST = auto()
-    ASSIGN = auto()
-    PRINT = auto()
-    DEFINE = auto()
-    DATA = auto()
-    COLON = auto()
-    ARROW = auto()
-    DOT = auto()
-    PARENBEGIN = auto() # can maybe just be id
-    PARENEND = auto()
-    ID = auto()
-    NEWLINE = auto()
-    SKIP = auto()
-    MISMATCH = auto()
+    CONST = auto(); ALPHABETIC = auto(); SPECIAL = auto()
+    NEWLINE = auto(); INDENT = auto()
 
 class Ops(FastEnum):
-    ADD = auto()
-    SUB = auto()
-    MUL = auto()
-    DIV = auto()
-    CONST = auto()
-    GROUP = auto()
-    PRINT = auto()
+    ADD = auto(); SUB = auto(); MUL = auto(); DIV = auto(),
+    CONST = auto(); ASSIGN = auto(); LOAD = auto()
+    GROUP = auto(); PRINT = auto()
 
 class OpGroup:
     Binary = {Ops.ADD, Ops.SUB, Ops.MUL, Ops.DIV}
-    Terminal = {Ops.PRINT}
+    Terminal = {Ops.PRINT, Ops.ASSIGN}
 
 class TypeGroup:
     Number = {int, float}
 
-token_specification = list(map(lambda t: (t[0], re.compile(t[1])), [
+token_specification = [(token, re.compile(regex)) for token, regex in [
     (Token.CONST, r"\d+(\.\d*)?"),  # Integer or decimal number
-    (Token.ASSIGN, r"="),  # Assignment operator
-    (Token.PRINT, r"print "),  # Print
-    (Token.DEFINE, r"define "),  # Define
-    (Token.DATA, r"data "),  # Data
-    (Token.COLON, r":"),  # Colon
-    (Token.ARROW, r"->"),  # Return type arrow
-    (Token.DOT, r"\."),  # .
-    (Token.PARENBEGIN, r"\("),  # (
-    (Token.PARENEND, r"\)"),  # )
-    (Token.ID, r"[A-Za-z_+\-*/]\w*"),  # Identifiers
+    (Token.ALPHABETIC, r"[A-Za-z_]\w*"),  # Identifiers
     (Token.NEWLINE, r"\n"),  # Line endings
-    (Token.SKIP, r"[ \t]+"),  # Skip over spaces and tabs
-    (Token.MISMATCH, r"."),  # Any other character
-]))
+    (Token.INDENT, r"[ \t]+"),  # Tabs and spaces
+    (Token.SPECIAL, r"."),  # Any other character
+]]
 
 class Symbol():
     __slots__ = ["id", "value", "dtype", "sources"]
-    def __init__(self, id:FastEnum, value:any=None, dtype:type=None, sources=tuple()):
+    def __init__(self, id:FastEnum, value:any=None, dtype:type=None, sources=()):
         self.id = id
         self.value = value
         self.dtype = dtype
@@ -95,29 +70,29 @@ class ElipticalPattern(Pattern):
     pass
 
 class PatternMatcher:
-    def __init__(self, patterns:list[Tuple[Union[Pattern, Tuple[Pattern]], Callable]]):
-        self.patterns:list[Tuple[Tuple[Pattern], Callable]] = [(pat if isinstance(pat, tuple) else (pat,), fxn) for pat,fxn in patterns]
+    def __init__(self, patterns_list:list[Tuple[Union[Pattern, Tuple[Pattern]], Callable]]):
+        self.patterns_list:list[Tuple[Tuple[Pattern], Callable]] = [(pat if isinstance(pat, tuple) else (pat,), fxn) for pat,fxn in patterns_list]
         
     def rewrite(self, symbols:List[Symbol], ctx=None) -> Tuple[bool, int, any]:
-        for pattern_tuple, fxn in self.patterns:
+        for patterns, fxn in self.patterns_list:
             pattern_index = 0 
             pattern_length = 0
             args: Dict[str, Union[Symbol, Tuple[Symbol]]] = {}
             for contender in symbols:
-                if pattern_index >= len(pattern_tuple): break
-                matcher = pattern_tuple[pattern_index]
-                if isinstance(matcher, ElipticalPattern): # TODO Make clean
-                    success = pattern_tuple[pattern_index + 1].match(contender, args)
+                if pattern_index >= len(patterns): break
+                pattern = patterns[pattern_index]
+                if isinstance(pattern, ElipticalPattern): # TODO Make clean
+                    success = patterns[pattern_index + 1].match(contender, args)
                     if success:
                         pattern_index += 2
-                        if matcher.name is not None: args[matcher.name] = tuple(symbols[pattern_index:pattern_length])
+                        if pattern.name is not None: args[pattern.name] = tuple(symbols[pattern_index:pattern_length])
                     pattern_length += 1
                     continue
-                success = matcher.match(contender, args)
+                success = pattern.match(contender, args)
                 if not success: break
                 pattern_index += 1
                 pattern_length += 1
-            if pattern_index >= len(pattern_tuple):
+            if pattern_index >= len(patterns):
                 return (True, pattern_length, fxn(ctx=ctx, **args))
         return (False, 0, None)
 
@@ -126,12 +101,12 @@ def tokenize(code: str) -> List[Tuple[Token, Any]]:
     symbols = []
     while position < len(code):
         match = None
-        for token, pattern_tuple in token_specification:
-            match = pattern_tuple.match(code, position)
+        for token, regex in token_specification:
+            match = regex.match(code, position)
             if not match: continue
             value = match.group()
             position = match.end()
-            if token is Token.SKIP: break
+            if token is Token.INDENT: break
             if token is Token.CONST: value = float(value) if "." in value else int(value)
             symbols.append(Symbol(token, value, type(value)))
             break
@@ -139,22 +114,30 @@ def tokenize(code: str) -> List[Tuple[Token, Any]]:
 
 def resolve_number(symbols:Tuple[Symbol]) -> type:
     return float if float in [symbol.dtype for symbol in symbols] else int
+
 def get_div(a:Symbol, b:Symbol):
     if a.dtype is not float and b.dtype is not float:
         if type(b.value) is int: b.value = float(b.value)
         b.dtype = float
     return Symbol(Ops.DIV, dtype=float, sources=(a,b))
 
+def assign_variable(variable:Symbol, value:Symbol, ctx:Dict[str, Symbol]) -> Symbol:
+    symbol = Symbol(Ops.ASSIGN, variable.value, value.dtype, (value,))
+    ctx[variable.value] = symbol
+    return symbol
+
 class Parser:
-    precedence: Dict[int, List[str]] = {2: ['+', '-'], 3: ['*', '/'], 4: ['(', ')'] }
+    precedence: Dict[int, List[str]] = {2: ['+', '-'], 3: ['*', '/'], 4: ['(', ')'], 5: ['=']}
     all_patterns:List[Tuple[Tuple[Pattern], Callable]] = [
-        ((Pattern(Token.PARENBEGIN, value='('), ElipticalPattern(name='x'), Pattern(Token.PARENEND, value=')')), lambda ctx,x: Symbol(Ops.GROUP, sources=x)),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(Token.ID, '+'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(Token.ID, '-'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.SUB, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(Token.ID, '*'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.MUL, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(Token.ID, '/'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: get_div(a,b)),
+        ((Pattern(value='('), ElipticalPattern(name='x'), Pattern(value=')')), lambda ctx,x: Symbol(Ops.GROUP, sources=x)),
+        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='+'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='-'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.SUB, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='*'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.MUL, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='/'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: get_div(a,b)),
         ((Pattern(Token.CONST, name='x'),), lambda ctx,x: Symbol(Ops.CONST, x.value, x.dtype)),
-        ((Pattern(Token.PRINT), Pattern(name='x')), lambda ctx,x: Symbol(Ops.PRINT, sources=x)),
+        ((Pattern(value='print'), Pattern(name='x')), lambda ctx,x: Symbol(Ops.PRINT, sources=x)),
+        ((Pattern(Token.ALPHABETIC, name='a'), Pattern(value='='), Pattern(name='b')), lambda ctx,a,b: assign_variable(a, b, ctx)),
+        ((Pattern(Token.ALPHABETIC, name='x'),), lambda ctx,x: Symbol(Ops.LOAD, x.value, ctx[x.value].dtype, sources=(ctx[x.value],))),
         ((Pattern(Token.NEWLINE),), lambda ctx: None),
     ]
 
@@ -163,34 +146,34 @@ class Parser:
         lowest_precedence = list(self.all_patterns)
         self.precedence_patterns: Dict[int, PatternMatcher] = {}
         for precedence_level, prec in precedence.items():
-            patterns = [(pats,fxn) for pats,fxn in self.all_patterns if any(pat.value in prec for pat in pats)]
-            if len(patterns) == 0: continue
-            for pattern_tuple in patterns:
-                lowest_precedence.remove(pattern_tuple)
-            self.precedence_patterns[precedence_level] = PatternMatcher(patterns)
+            patterns_list = [(pats,fxn) for pats,fxn in self.all_patterns if any(pat.value in prec for pat in pats)]
+            if len(patterns_list) == 0: continue
+            for patterns in patterns_list:
+                lowest_precedence.remove(patterns)
+            self.precedence_patterns[precedence_level] = PatternMatcher(patterns_list)
         self.min_precedence_level = list(precedence.keys())[-1]-1
         self.precedence_patterns[self.min_precedence_level] = PatternMatcher(lowest_precedence)
 
-    def precedence_pass(self, symbols: List[Symbol], matcher:PatternMatcher, precedence_level:int):
+    def precedence_pass(self, symbols: List[Symbol], pattern:PatternMatcher, variables:Dict[str, Symbol], precedence_level:int):
         for i in reversed(range(len(symbols))):
-            success, length, rewrite = matcher.rewrite(symbols[i:])
+            success, length, rewrite = pattern.rewrite(symbols[i:], variables)
             if not success: continue
             if rewrite is None:
                 del symbols[i:i+length]
                 continue
             used_symbols = symbols[i:i+length]
-            sources = self.parse_ast(used_symbols, precedence_level-1)
+            sources = self.parse_ast(used_symbols, variables, precedence_level-1)
             rewrite.sources = tuple([contender for contender in sources if isinstance(contender.id, Ops)])
             del symbols[i:i+length]
             symbols.insert(i, rewrite)
                 
 
-    def parse_ast(self, tokens: List[Symbol], max_precedence_level=100) -> List[Symbol]:
+    def parse_ast(self, tokens: List[Symbol], variables:Dict[str, Symbol]={}, max_precedence_level=100) -> List[Symbol]:
         if self.min_precedence_level > max_precedence_level: return tokens
         ast = list(tokens)
-        for precedence_level, matcher in self.precedence_patterns.items():
+        for precedence_level, pattern in self.precedence_patterns.items():
             if precedence_level > max_precedence_level: continue
-            self.precedence_pass(ast, matcher, precedence_level)
+            self.precedence_pass(ast, pattern, variables, precedence_level)
         return ast
 
 def get_children_dfs(sym:Symbol, children:Dict[Symbol, List[Symbol]]):
@@ -212,9 +195,12 @@ op_patterns: Dict = {
     Ops.DIV: lambda a,b: f"({a}/{b})",
 }
 
+type_map = {int:'int', float:'float'}
 render_patterns = PatternMatcher([
     (Pattern(Ops.CONST, name='x', dtype=int), lambda ctx, x: f'{x.value}'),
     (Pattern(Ops.CONST, name='x', dtype=float), lambda ctx, x: f'{x.value}f'),
+    (Pattern(Ops.ASSIGN, name='x'), lambda ctx, x: f'{type_map[x.dtype]} {x.value} = {ctx[x.sources[1]]};'),
+    (Pattern(Ops.LOAD, name='x'), lambda ctx, x: f'{x.value}'),
     (Pattern(Ops.PRINT, sources=Pattern(name='x', dtype=int)), lambda ctx, x: r'printf("%d\n",' + f'{ctx[x]});'),
     (Pattern(Ops.PRINT, sources=Pattern(name='x', dtype=float)), lambda ctx, x: r'printf("%f\n",' + f'{ctx[x]});'),
     (Pattern(OpGroup.Binary, name='x', dtype=TypeGroup.Number), lambda ctx, x: op_patterns[x.id](
