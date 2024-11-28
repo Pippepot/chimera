@@ -1,6 +1,7 @@
 from __future__ import annotations
 from enum import auto, IntEnum, Enum
 from typing import Tuple, List, Any, Union, Dict, Callable, Optional, Set
+from itertools import groupby
 import re
 
 # wrapper around IntEnum that preserves Enum.__str__ and makes auto() unique across all FastEnum subclasses
@@ -129,15 +130,14 @@ class Parser:
     precedence: Dict[int, List[str]] = {2: ['+', '-'], 3: ['*', '/'], 4: ['(', ')']}
     all_patterns:List[Tuple[Tuple[Pattern], Callable]] = [
         ((Pattern(value='('), ElipticalPattern(name='x'), Pattern(value=')')), lambda ctx,x: Symbol(Ops.GROUP, sources=x)),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='+'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='-'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.SUB, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='*'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.MUL, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='/'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: get_div(a,b)),
+        ((Pattern(name='a'), Pattern(value='+'), Pattern(name='b')), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pattern(name='a'), Pattern(value='-'), Pattern(name='b')), lambda ctx,a,b: Symbol(Ops.SUB, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pattern(name='a'), Pattern(value='*'), Pattern(name='b')), lambda ctx,a,b: Symbol(Ops.MUL, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pattern(name='a'), Pattern(value='/'), Pattern(name='b')), lambda ctx,a,b: get_div(a,b)),
         ((Pattern(Token.CONST, name='x'),), lambda ctx,x: Symbol(Ops.CONST, x.value, x.dtype)),
         ((Pattern(value='print'), Pattern(name='x')), lambda ctx,x: Symbol(Ops.PRINT, sources=x)),
         ((Pattern(Token.ALPHABETIC, name='a'), Pattern(value='='), Pattern(name='b')), lambda ctx,a,b: assign_variable(a, b, ctx)),
         ((Pattern(Token.ALPHABETIC, name='x'),), lambda ctx,x: Symbol(Ops.LOAD, x.value, ctx[x.value].dtype, sources=(ctx[x.value],))),
-        ((Pattern(Token.NEWLINE),), lambda ctx: None),
     ]
 
     def __init__(self) -> None: 
@@ -162,18 +162,24 @@ class Parser:
                 continue
             
             del symbols[i:i+length]
-            if rewrite is None: continue
-
-            rewrite.sources = tuple(self.parse_ast(rewrite.sources, variables, precedence_level))
+            if len(rewrite.sources): rewrite.sources = tuple(self.parse_line(list(rewrite.sources), variables, precedence_level))
             symbols.insert(i, rewrite)
                 
 
-    def parse_ast(self, tokens: List[Symbol], variables:Dict[str, Symbol]={}, max_precedence_level=100) -> List[Symbol]:
+    def parse_line(self, tokens: List[Symbol], variables:Dict[str, Symbol], max_precedence_level) -> List[Symbol]:
         if self.min_precedence_level > max_precedence_level: return tokens
-        ast = list(tokens)
+        line = tokens.copy() # This can technically be removed since parse_ast does not use lines after parsing. Copy anyway to avoid nasy future bug
         for precedence_level, pattern in self.precedence_patterns.items():
             if precedence_level > max_precedence_level: continue
-            self.precedence_pass(ast, pattern, variables, precedence_level)
+            self.precedence_pass(line, pattern, variables, precedence_level)
+        return line
+    
+    def parse_ast(self, tokens: List[Symbol]) -> List[Symbol]:
+        ast:List[Symbol] = []
+        variables:Dict[str, Symbol] = {}
+        lines = [list(g) for is_new_line, g in groupby(tokens, lambda x: x.id is Token.NEWLINE) if not is_new_line]
+        for line in lines:
+            ast.extend(self.parse_line(line, variables, 100))
         return ast
 
 def get_children_dfs(sym:Symbol, children:Dict[Symbol, List[Symbol]]):
@@ -211,11 +217,12 @@ render_patterns = PatternMatcher([
 def render(symbols: List[Symbol]) -> str:
     refs: Dict[Symbol, str] = {}
     body = []
+    indent = 1
     for contender in symbols:
         success, _, value = render_patterns.rewrite((contender,), ctx=refs)
         if not success: continue
         if contender.id in {Ops.CONST, Ops.LOAD, *OpGroup.Binary}:
             refs[contender] = value
         elif contender.id in OpGroup.Terminal:
-            body.append(value)
+            body.append('  '*indent + value)
     return '\n'.join(body)

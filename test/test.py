@@ -15,15 +15,19 @@ class Test(unittest.TestCase):
         self.assertEqual(int(result), 5)
 
     def test_variable(self):
-        result = main.run('a = 1\tprint a')
+        result = main.run('a = 1\nprint a')
         self.assertEqual(int(result), 1)
 
     def test_variable_expression(self):
-        result = main.run('a = 2 * 4\tprint a')
+        result = main.run('a = 2 * 4\nprint a')
+        self.assertEqual(int(result), 8)
+
+    def test_two_variables(self):
+        result = main.run('a = 2\nb = 4\nprint a * b')
         self.assertEqual(int(result), 8)
 
     def test_variable_name_with_special(self):
-        result = main.run('a?3g = 1\tprint a?3g')
+        result = main.run('a?3g = 1\nprint a?3g')
         self.assertEqual(int(result), 1)
 
 if __name__ == '__main__':
