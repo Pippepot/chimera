@@ -21,6 +21,7 @@ class Ops(FastEnum):
 
 class OpGroup:
     Binary = {Ops.ADD, Ops.SUB, Ops.MUL, Ops.DIV}
+    Associative = {Ops.ADD, Ops.MUL}
     Terminal = {Ops.PRINT, Ops.ASSIGN}
 
 class TypeGroup:
@@ -40,7 +41,7 @@ class Symbol():
         self.id = id
         self.value = value
         self.dtype = dtype
-        self.sources = sources
+        self.sources = sources if isinstance(sources, tuple) else (sources,)
     def __repr__(self): return f"Symbol: {self.id}, {repr(self.value)}{'' if self.dtype is None else f', dtype={self.dtype.__name__}'}, src={self.sources}"
 
 class Pattern():
@@ -116,10 +117,8 @@ def resolve_number(symbols:Tuple[Symbol]) -> type:
     return float if float in [symbol.dtype for symbol in symbols] else int
 
 def get_div(a:Symbol, b:Symbol):
-    if a.dtype is not float and b.dtype is not float:
-        if type(b.value) is int: b.value = float(b.value)
-        b.dtype = float
-    return Symbol(Ops.DIV, dtype=float, sources=(a,b))
+    dtype = int if a.dtype is not float and b.dtype is not float else float
+    return Symbol(Ops.DIV, dtype=dtype, sources=(a,b))
 
 def assign_variable(variable:Symbol, value:Symbol, ctx:Dict[str, Symbol]) -> Symbol:
     symbol = Symbol(Ops.ASSIGN, variable.value, value.dtype, (value,))
@@ -127,7 +126,7 @@ def assign_variable(variable:Symbol, value:Symbol, ctx:Dict[str, Symbol]) -> Sym
     return symbol
 
 class Parser:
-    precedence: Dict[int, List[str]] = {2: ['+', '-'], 3: ['*', '/'], 4: ['(', ')'], 5: ['=']}
+    precedence: Dict[int, List[str]] = {2: ['+', '-'], 3: ['*', '/'], 4: ['(', ')']}
     all_patterns:List[Tuple[Tuple[Pattern], Callable]] = [
         ((Pattern(value='('), ElipticalPattern(name='x'), Pattern(value=')')), lambda ctx,x: Symbol(Ops.GROUP, sources=x)),
         ((Pattern(name='a', dtype=TypeGroup.Number), Pattern(value='+'), Pattern(name='b', dtype=TypeGroup.Number)), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
@@ -161,15 +160,12 @@ class Parser:
             if not success:
                 i += 1
                 continue
-            if rewrite is None:
-                del symbols[i:i+length]
-                continue
-            used_symbols = symbols[i:i+length]
-            sources = self.parse_ast(used_symbols, variables, precedence_level-1)
-            rewrite.sources = tuple([contender for contender in sources if isinstance(contender.id, Ops)])
+            
             del symbols[i:i+length]
+            if rewrite is None: continue
+
+            rewrite.sources = tuple(self.parse_ast(rewrite.sources, variables, precedence_level))
             symbols.insert(i, rewrite)
-            i += 1
                 
 
     def parse_ast(self, tokens: List[Symbol], variables:Dict[str, Symbol]={}, max_precedence_level=100) -> List[Symbol]:
@@ -203,12 +199,12 @@ type_map = {int:'int', float:'float'}
 render_patterns = PatternMatcher([
     (Pattern(Ops.CONST, name='x', dtype=int), lambda ctx, x: f'{x.value}'),
     (Pattern(Ops.CONST, name='x', dtype=float), lambda ctx, x: f'{x.value}f'),
-    (Pattern(Ops.ASSIGN, name='x'), lambda ctx, x: f'{type_map[x.dtype]} {x.value} = {ctx[x.sources[1]]};'),
+    (Pattern(Ops.ASSIGN, name='x'), lambda ctx, x: f'{type_map[x.dtype]} {x.value} = {ctx[x.sources[0]]};'),
     (Pattern(Ops.LOAD, name='x'), lambda ctx, x: f'{x.value}'),
     (Pattern(Ops.PRINT, sources=Pattern(name='x', dtype=int)), lambda ctx, x: r'printf("%d\n",' + f'{ctx[x]});'),
     (Pattern(Ops.PRINT, sources=Pattern(name='x', dtype=float)), lambda ctx, x: r'printf("%f\n",' + f'{ctx[x]});'),
     (Pattern(OpGroup.Binary, name='x', dtype=TypeGroup.Number), lambda ctx, x: op_patterns[x.id](
-        *[ctx[source] for source in x.sources]
+        *[ctx[source][1:-1] if x.id == source.id and x.id in OpGroup.Associative else ctx[source] for source in x.sources]
     )),
 ])
 
@@ -218,7 +214,7 @@ def render(symbols: List[Symbol]) -> str:
     for contender in symbols:
         success, _, value = render_patterns.rewrite((contender,), ctx=refs)
         if not success: continue
-        if contender.id in {Ops.CONST, *OpGroup.Binary}:
+        if contender.id in {Ops.CONST, Ops.LOAD, *OpGroup.Binary}:
             refs[contender] = value
         elif contender.id in OpGroup.Terminal:
             body.append(value)

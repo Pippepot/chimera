@@ -1,9 +1,21 @@
-from parser import tokenize, Parser, linearize, render
-from compiler import compile
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from chimera.parser import tokenize, Parser, linearize, render
+from chimera.compiler import compile
 
 code = """
-print 2* 2- 1
+a = 1 + 34 + 2 + 3 * 4 * 5 * 9
+print a
 """
+
+def run(code:str):
+    tokens = tokenize(code)
+    ast = Parser().parse_ast(tokens)
+    procedure = linearize(ast)
+    rendering = render(procedure)
+    return compile(rendering)
 
 def main():
     print("===TOKENS===")

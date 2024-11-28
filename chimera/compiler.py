@@ -1,6 +1,6 @@
 import ctypes, subprocess, tempfile
 import time
-from parser import Symbol
+from chimera.parser import Symbol
 
 def compile(code: str):
     code = f'#include <stdio.h>\nint main(int argc, char *argv[]) {{\n {code} \n}}'
@@ -11,4 +11,5 @@ def compile(code: str):
     t = time.perf_counter()-st
     print(f"Ran in {t}ms")
     print(result.stdout)
+    return result.stdout
  
