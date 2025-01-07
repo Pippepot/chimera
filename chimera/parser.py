@@ -45,17 +45,17 @@ class Symbol():
         self.sources = sources if isinstance(sources, tuple) else (sources,)
     def __repr__(self): return f"Symbol: {self.id}, {repr(self.value)}{'' if self.dtype is None else f', dtype={self.dtype.__name__}'}, src={self.sources}"
 
-class Pattern():
+class Pat():
     __slots__ = ["id", "value", "dtype", "sources", "name"]
-    def __init__(self, id:Optional[Union[FastEnum, Tuple[FastEnum], Set[FastEnum]]]=None, value:Optional[any]=None,
-                 dtype:Optional[Union[type, Tuple[type], Set[type]]]=None, sources:Optional[Union[Pattern, Tuple[Pattern]]]=None, name:Optional[str]=None):
+    def __init__(self, id:Optional[FastEnum|Tuple[FastEnum]|Set[FastEnum]]=None, value:Optional[any]=None,
+                 dtype:Optional[type|Tuple[type]|Set[type]]=None, sources:Optional[Pat|Tuple[Pat]]=None, name:Optional[str]=None):
         self.id: Optional[Tuple[FastEnum]] = (id,) if isinstance(id, FastEnum) else tuple(id) if isinstance(id, list) or isinstance(id, set) else id
         self.value = value
         self.dtype: Optional[tuple[type]] = dtype if isinstance(dtype, tuple) or dtype is None else tuple(dtype) if isinstance(dtype, set) else (dtype,)
-        self.sources:Optional[Tuple[Pattern]] = sources if isinstance(sources, tuple) or sources is None else (sources,)
+        self.sources:Optional[Tuple[Pat]] = sources if isinstance(sources, tuple) or sources is None else (sources,)
         self.name = name
         
-    def match(self, symbol:Symbol, args:Dict[str, Union[Symbol, Tuple[Symbol]]]) -> bool:
+    def match(self, symbol:Symbol, args:Dict[str, Symbol|Tuple[Symbol]]) -> bool:
         if (self.id is not None and symbol.id not in self.id) or \
            (self.value is not None and symbol.value != self.value) or \
            (self.dtype is not None and symbol.dtype not in self.dtype): return False
@@ -68,26 +68,26 @@ class Pattern():
     def __repr__(self):
         return f"Pat({self.id}, {self.value}, {self.name})"
 
-class ElipticalPattern(Pattern):
+class ElipticalPat(Pat):
     pass
 
 class PatternMatcher:
-    def __init__(self, patterns_list:list[Tuple[Union[Pattern, Tuple[Pattern]], Callable]]):
-        self.patterns_list:list[Tuple[Tuple[Pattern], Callable]] = [(pat if isinstance(pat, tuple) else (pat,), fxn) for pat,fxn in patterns_list]
+    def __init__(self, patterns_list:list[Tuple[Union[Pat, Tuple[Pat]], Callable]]):
+        self.patterns_list:list[Tuple[Tuple[Pat], Callable]] = [(pat if isinstance(pat, tuple) else (pat,), fxn) for pat,fxn in patterns_list]
         
     def rewrite(self, symbols:List[Symbol], ctx=None) -> Tuple[bool, int, any]:
         for patterns, fxn in self.patterns_list:
             pattern_index = 0 
             pattern_length = 0
-            args: Dict[str, Union[Symbol, Tuple[Symbol]]] = {}
+            args: Dict[str, Symbol|Tuple[Symbol]] = {}
             for contender in symbols:
                 if pattern_index >= len(patterns): break
                 pattern = patterns[pattern_index]
-                if isinstance(pattern, ElipticalPattern): # TODO Make clean
+                if isinstance(pattern, ElipticalPat): # TODO Make clean
                     success = patterns[pattern_index + 1].match(contender, args)
                     if success:
-                        pattern_index += 2
                         if pattern.name is not None: args[pattern.name] = tuple(symbols[pattern_index:pattern_length])
+                        pattern_index += 2
                     pattern_length += 1
                     continue
                 success = pattern.match(contender, args)
@@ -128,16 +128,20 @@ def assign_variable(variable:Symbol, value:Symbol, ctx:Dict[str, Symbol]) -> Sym
 
 class Parser:
     precedence: Dict[int, List[str]] = {2: ['+', '-'], 3: ['*', '/'], 4: ['(', ')']}
-    all_patterns:List[Tuple[Tuple[Pattern], Callable]] = [
-        ((Pattern(value='('), ElipticalPattern(name='x'), Pattern(value=')')), lambda ctx,x: Symbol(Ops.GROUP, sources=x)),
-        ((Pattern(name='a'), Pattern(value='+'), Pattern(name='b')), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a'), Pattern(value='-'), Pattern(name='b')), lambda ctx,a,b: Symbol(Ops.SUB, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a'), Pattern(value='*'), Pattern(name='b')), lambda ctx,a,b: Symbol(Ops.MUL, dtype=resolve_number((a, b)), sources=(a,b))),
-        ((Pattern(name='a'), Pattern(value='/'), Pattern(name='b')), lambda ctx,a,b: get_div(a,b)),
-        ((Pattern(Token.CONST, name='x'),), lambda ctx,x: Symbol(Ops.CONST, x.value, x.dtype)),
-        ((Pattern(value='print'), Pattern(name='x')), lambda ctx,x: Symbol(Ops.PRINT, sources=x)),
-        ((Pattern(Token.ALPHABETIC, name='a'), Pattern(value='='), Pattern(name='b')), lambda ctx,a,b: assign_variable(a, b, ctx)),
-        ((Pattern(Token.ALPHABETIC, name='x'),), lambda ctx,x: Symbol(Ops.LOAD, x.value, ctx[x.value].dtype, sources=(ctx[x.value],))),
+    all_patterns:List[Tuple[Tuple[Pat], Callable]] = [
+        ((Pat(value='('), ElipticalPat(name='x'), Pat(value=')')), lambda ctx,x: Symbol(Ops.GROUP, sources=x)),
+        ((Pat(name='a'), Pat(value='+'), Pat(name='b')), lambda ctx,a,b: Symbol(Ops.ADD, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pat(name='a'), Pat(value='-'), Pat(name='b')), lambda ctx,a,b: Symbol(Ops.SUB, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pat(name='a'), Pat(value='*'), Pat(name='b')), lambda ctx,a,b: Symbol(Ops.MUL, dtype=resolve_number((a, b)), sources=(a,b))),
+        ((Pat(name='a'), Pat(value='/'), Pat(name='b')), lambda ctx,a,b: get_div(a,b)),
+        ((Pat(Token.CONST, name='x'),), lambda ctx,x: Symbol(Ops.CONST, x.value, x.dtype)),
+        ((Pat(value='print'), Pat(name='x')), lambda ctx,x: Symbol(Ops.PRINT, sources=x)),
+        ((Pat(Token.ALPHABETIC, name='a'), Pat(value='='), Pat(name='b')), lambda ctx,a,b: assign_variable(a, b, ctx)),
+        ((Pat(Token.ALPHABETIC, name='x'),), lambda ctx,x: Symbol(Ops.LOAD, x.value, ctx[x.value].dtype, sources=(ctx[x.value],))),
+    ]
+
+    functions:List[Symbol] = [
+        
     ]
 
     def __init__(self) -> None: 
@@ -162,7 +166,9 @@ class Parser:
                 continue
             
             del symbols[i:i+length]
-            if len(rewrite.sources): rewrite.sources = tuple(self.parse_line(list(rewrite.sources), variables, precedence_level))
+            if rewrite.sources:
+                rewrite.sources = tuple(self.parse_line(list(rewrite.sources), variables, precedence_level))
+                if len(rewrite.sources) == 1: rewrite.dtype = rewrite.sources[0].dtype
             symbols.insert(i, rewrite)
                 
 
@@ -203,13 +209,14 @@ op_patterns: Dict = {
 
 type_map = {int:'int', float:'float'}
 render_patterns = PatternMatcher([
-    (Pattern(Ops.CONST, name='x', dtype=int), lambda ctx, x: f'{x.value}'),
-    (Pattern(Ops.CONST, name='x', dtype=float), lambda ctx, x: f'{x.value}f'),
-    (Pattern(Ops.ASSIGN, name='x'), lambda ctx, x: f'{type_map[x.dtype]} {x.value} = {ctx[x.sources[0]]};'),
-    (Pattern(Ops.LOAD, name='x'), lambda ctx, x: f'{x.value}'),
-    (Pattern(Ops.PRINT, sources=Pattern(name='x', dtype=int)), lambda ctx, x: r'printf("%d\n",' + f'{ctx[x]});'),
-    (Pattern(Ops.PRINT, sources=Pattern(name='x', dtype=float)), lambda ctx, x: r'printf("%f\n",' + f'{ctx[x]});'),
-    (Pattern(OpGroup.Binary, name='x', dtype=TypeGroup.Number), lambda ctx, x: op_patterns[x.id](
+    (Pat(Ops.CONST, name='x', dtype=int), lambda ctx, x: f'{x.value}'),
+    (Pat(Ops.CONST, name='x', dtype=float), lambda ctx, x: f'{x.value}f'),
+    (Pat(Ops.ASSIGN, name='x'), lambda ctx, x: f'{type_map[x.dtype]} {x.value} = {ctx[x.sources[0]]};'),
+    (Pat(Ops.LOAD, name='x'), lambda ctx, x: f'{ctx[x.sources[0]]}'),
+    (Pat(Ops.GROUP, name='x'), lambda ctx, x: f'({ctx[x.sources[0]]})'),
+    (Pat(Ops.PRINT, sources=Pat(name='x', dtype=int)), lambda ctx, x: r'printf("%d\n",' + f'{ctx[x]});'),
+    (Pat(Ops.PRINT, sources=Pat(name='x', dtype=float)), lambda ctx, x: r'printf("%f\n",' + f'{ctx[x]});'),
+    (Pat(OpGroup.Binary, name='x', dtype=TypeGroup.Number), lambda ctx, x: op_patterns[x.id](
         *[ctx[source][1:-1] if x.id == source.id and x.id in OpGroup.Associative else ctx[source] for source in x.sources]
     )),
 ])
@@ -220,8 +227,13 @@ def render(symbols: List[Symbol]) -> str:
     indent = 1
     for contender in symbols:
         success, _, value = render_patterns.rewrite((contender,), ctx=refs)
-        if not success: continue
-        if contender.id in {Ops.CONST, Ops.LOAD, *OpGroup.Binary}:
+        if not success:
+            print("RENDER: Failed to parse", contender)
+            continue
+
+        if contender.id in {Ops.ASSIGN}:
+            refs[contender] = contender.value
+        if contender.id in {Ops.GROUP, Ops.CONST, Ops.LOAD, *OpGroup.Binary}:
             refs[contender] = value
         elif contender.id in OpGroup.Terminal:
             body.append('  '*indent + value)

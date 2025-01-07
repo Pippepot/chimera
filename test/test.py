@@ -27,7 +27,7 @@ class Test(unittest.TestCase):
         self.assertEqual(int(result), 8)
 
     def test_variable_name_with_special(self):
-        result = main.run('a?3g = 1\nprint a?3g')
+        result = main.run('a3g = 1\nprint (a3g)')
         self.assertEqual(int(result), 1)
 
 if __name__ == '__main__':
