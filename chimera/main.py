@@ -6,16 +6,17 @@ from chimera.parser import tokenize, Parser, linearize, render
 from chimera.compiler import compile
 
 code = """
-a = 1 + 34 + 2 + 3 * 4 * 5 * 9
-print a
+foo = \\n -> int
+    
+print (foo)
 """
 
 def run(code:str):
     tokens = tokenize(code)
     ast = Parser().parse_ast(tokens)
     procedure = linearize(ast)
-    rendering = render(procedure)
-    return compile(rendering)
+    rendering, functions = render(procedure)
+    return compile(rendering, functions)
 
 def main():
     print("===TOKENS===")
@@ -34,11 +35,11 @@ def main():
         print(line)
     print()
     print("===RENDER===")
-    rend = render(procedure)
+    rend, functions = render(procedure)
     print(rend)
     print()
     print("===COMPILE===")
-    compile(rend)
+    compile(rend, functions)
 
 if __name__ == "__main__":
     main()
