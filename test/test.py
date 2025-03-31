@@ -7,8 +7,12 @@ import unittest
 
 class Test(unittest.TestCase): 
   def test_print_array(self):
-    ast = [Print(Array([1, 2]))]
+    ast = Print(Array([1, 2]))
     self.assertEqual(self.parse(ast), '1\n2\n')
+
+  def test_print_multi_array(self):
+    ast = Print(Array([[1, 2],[3, 4]]))
+    self.assertEqual(self.parse(ast), '1\n2\n3\n4\n')
 
   def test_add_array(self):
     ast = Print(

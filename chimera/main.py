@@ -1,21 +1,12 @@
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from chimera.graph import Print, BinaryOp, Index, Array, Const, Loop, Assign, Call, Function, Assign, Var, parse_ast
+from chimera.graph import Print, BinaryOp, Index, Array, Const, Loop, Assign, Assign, Var, parse_ast
 from chimera import compiler, renderer
 import time
 
 def main():
   ast = [
-    Print(
-      Index(
-        BinaryOp(
-          op='+',
-          left=BinaryOp(
-            op='*',
-            left=Array([15, 20]), 
-            right=Array([40, 50])), 
-          right=Const(15)),
-        Const(0)))
+    Print(BinaryOp('*', Array([[[1, 2, 3],[3, 4, 5]],[[6, 7, 8],[9, 10, 11]]]), Const(1)))
   ]
   
   for node in ast: node.print_tree()

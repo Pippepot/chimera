@@ -1,19 +1,38 @@
 from __future__ import annotations
 from typing import Callable
 from chimera.dtype import DType, dtypes
-from chimera.helpers import fully_flatten, get_shape, all_same, tupled
-import inspect
+from chimera.helpers import fully_flatten, get_shape, all_same, all_instance, listed
+from chimera.view import View
+import inspect, functools
 
 ### Graph Nodes ###
 
 class Node():
   terminal:bool = False
+  _sources:list[Node] = []
+  _dtype:DType = dtypes.void
+  _view:View = View.create()
   @property
-  def sources(self) -> tuple[Node]: return ()
+  def sources(self) -> tuple[Node]: return self._sources
   @property
-  def dtype(self) -> DType: return dtypes.void
+  def dtype(self) -> DType: return self._dtype
   @property
-  def shape(self) -> tuple[int]: return ()
+  def view(self) -> View: return self._view
+  @property
+  def shape(self) -> tuple[int, ...]: return self._view.shape
+
+  def update_sources(self, sources):
+    sources = listed(sources)
+    assert not self.sources or len(self.sources) == len(sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(sources)}"
+    self._sources = sources
+
+  def copy_with_sources(self, new_sources: tuple[Node]) -> Node:
+    """Create a new node with the same attributes but different sources"""
+    new_node = self.__class__.__new__(self.__class__)
+    for key, value in self.__dict__.items():
+      if key not in ['_sources']: setattr(new_node, key, value)
+    new_node._sources = new_sources
+    return new_node
 
   def print_tree(self):
     string = self.__repr__() + "\n"
@@ -35,144 +54,136 @@ class Node():
 
 class Const(Node):
   def __init__(self, value):
-    self.value = value
+    assert isinstance(value, (int, float, Const)), f"Const node can only have values of type int, float, Const. Type was {type(value)}"
+    self._value = value.value if isinstance(value, Const) else value
+    self._dtype = dtypes.python_to_dtype[type(self.value)]
   @property
-  def dtype(self): return dtypes.python_to_dtype[type(self.value)]
-  @property
-  def shape(self): return ()
+  def value(self): return self._value
   def __repr__(self): return f"Const {self.value}"
 
 class Var(Node):
   def __init__(self, data:Node, name:str="var"):
-    self.data = data if isinstance(data, Node) else Const(data)
-    self.name = name
+    self.update_sources(data if isinstance(data, Node) else Const(data))
+    self._name = name
   @property
-  def sources(self): return (self.data,)
-  @sources.setter
-  def sources(self, sources): self.data = sources[0]
+  def name(self) -> str: return self._name
   @property
-  def dtype(self): return self.data.dtype
-  @property
-  def shape(self): return self.data.shape
+  def data(self) -> Node: return self.sources[0]
   def __repr__(self): return self.name
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    assert self.data, "self.data should not be none"
+    self._view = self.data.view
+    self._dtype = self.data.dtype
 
 class Assign(Node):
   def __init__(self, var:Var):
-    self.var = var
+    self._sources = [var]
   @property
-  def sources(self): return (self.var,)
-  @sources.setter
-  def sources(self, sources): self.var = sources[0]
+  def var(self): return self.sources[0]
 
-class SymbolicIndex(Node):
-  def __init__(self, name: str):
-    self.name = name
-  @property
-  def dtype(self) -> type: dtypes.int32
-  @property
-  def shape(self): return (1,)
-  def __repr__(self): return f"Idx {self.name}"
+# class SymbolicIndex(Node):
+#   def __init__(self, name: str):
+#     self.name = name
+#   def __repr__(self): return f"Idx {self.name}"
 
 class Array(Node):
-  def __init__(self, data):
-    self._shape = get_shape(data)
-    self.data = fully_flatten(data)
+  def __init__(self, data:list):
+    self._view = View.create(get_shape(data))
+    print(self.view)
+    self._data = fully_flatten(data)
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
-    self._dtype = dtypes.python_to_dtype[type(data[0])]
+    self._dtype = dtypes.python_to_dtype[type(self.data[0])]
   @property
-  def dtype(self): return self._dtype
-  @property
-  def shape(self): return self._shape
-  def __len__(self): return self._shape[0]
+  def data(self) -> Node: return self._data
 
 class Index(Node):
   def __init__(self, data:Node, indices):
-    self.data = data
-    self.indices = tupled(indices)
-    assert len(self.indices) <= len(self.data.shape), f"Too many indices {indices} for {data.shape}"
+    self.update_sources([data] + [i if isinstance(i, Node) else Const(i) for i in listed(indices)])
   @property
-  def sources(self): return (self.data,) + self.indices
-  @sources.setter
-  def sources(self, sources):
-    self.data, *self.indices = sources
-    self.indices = tuple(self.indices)
+  def data(self) -> Node: return self.sources[0]
   @property
-  def dtype(self): return self.data.dtype
-  @property
-  def shape(self): return self.data.shape[len(self.indices):]
-  def __repr__(self): return f"Index"
+  def indices(self) -> Node: return self.sources[1:]
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    assert len(self.indices) <= len(self.data.shape), f"Too many indices {self.indices} for {self.data.shape}"
+    self._view = View.create(self.data.shape[len(self.indices):]) #TODO probs not correct
+    self._dtype = self.data.dtype
 
 class Loop(Node):
-  def __init__(self, start, stop, step, scope, idx=None):
-    if not isinstance(start, Node): start = Const(start)
-    self.stop = stop if isinstance(stop, Node) else Const(stop)
-    self.step = step if isinstance(step, Node) else Const(step)
-    self.scope = scope
-    self.idx = idx if idx else Var(start, "idx")
-    self.assign = Assign(idx)
+  def __init__(self, start:Var|Const, stop:Const, step:Const, scope:Node):
+    if not isinstance(start, Var): start = Var(Const(start), "idx")
+    stop, step = Const(stop), Const(step)
+    self.update_sources([Assign(start), stop, step, scope])
   @property
-  def sources(self): return (self.assign, self.stop, self.step, self.scope)
-  @sources.setter
-  def sources(self, sources): self.stop, self.step, self.assign, self.scope = sources
+  def assign(self) -> Assign: return self.sources[0]
   @property
-  def dtype(self): return self.scope.dtype
+  def idx(self) -> Var: return self.assign.var
   @property
-  def dtype(self): return self.scope.shape
+  def stop(self) -> Const: return self.sources[1]
+  @property
+  def step(self) -> Const: return self.sources[2]
+  @property
+  def scope(self) -> Node: return self.sources[3]
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    assert isinstance(self.assign, Assign) and all_instance((self.stop, self.step), Const), f"Sources are of wrong types {[type(x) for x in sources]}"
+    self._view = self.scope.view
 
 class BinaryOp(Node):
-  def __init__(self, op, left, right):
-    self.op, self.left, self.right = op, left, right
+  def __init__(self, op, left:Node, right:Node):
+    self.update_sources([left, right])
+    self._op = op
   @property
-  def sources(self): return (self.left, self.right)
-  @sources.setter
-  def sources(self, sources): self.left, self.right = sources
+  def op(self): return self._op
   @property
-  def dtype(self): return self.left.dtype
+  def left(self): return self.sources[0]
   @property
-  def shape(self):
-    if len(self.left.shape) > len(self.right.shape): return self.left.shape
-    if len(self.left.shape) < len(self.right.shape): return self.right.shape
+  def right(self): return self.sources[1]
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    shape = self.left.shape
     # Need to broadcast in the future
-    return tuple(max(l, r) for l, r in zip(self.left.shape, self.right.shape))
+    if len(self.left.shape) < len(self.right.shape): shape = self.right.shape
+    elif len(self.left.shape) == len(self.right.shape): tuple(max(l, r) for l, r in zip(self.left.shape, self.right.shape))
+    self._view = View.create(shape)
+    self._dtype = self.left.dtype
   def __repr__(self): return f"{super().__repr__()} {self.op}"
 
-class Function(Node):
-  def __init__(self, args, body):
-    self.args = (args,) if isinstance(args, Node) else args
-    self.body = body
-  @property
-  def sources(self): return self.args + (self.body,)
-  @sources.setter
-  def sources(self, sources): self.args, self.body = sources
-  @property
-  def dtype(self): return self.body.dtype
-  @property
-  def dtype(self): return self.body.shape
+# class Function(Node):
+#   def __init__(self, args, body):
+#     self.args = (args,) if isinstance(args, Node) else args
+#     self.body = body
+#   @property
+#   def sources(self): return self.args + (self.body,)
+#   @sources.setter
+#   def sources(self, sources): self.args, self.body = sources
+#   @property
+#   def dtype(self): return self.body.dtype
+#   @property
+#   def dtype(self): return self.body.shape
 
-class Call(Node):
-  def __init__(self, func:Function, args:tuple[Node]):
-    self.func = func
-    self.args = (args,) if isinstance(args, Node) else args
-  @property
-  def sources(self): return (self.func) + self.args
-  @sources.setter
-  def sources(self, sources): self.func, self.args = sources
-  @property
-  def dtype(self): return self.func.dtype
-  @property
-  def shape(self): return self.func.shape
+# class Call(Node):
+#   def __init__(self, func:Function, args:tuple[Node]):
+#     self.func = func
+#     self.args = (args,) if isinstance(args, Node) else args
+#   @property
+#   def sources(self): return (self.func) + self.args
+#   @sources.setter
+#   def sources(self, sources): self.func, self.args = sources
+#   @property
+#   def dtype(self): return self.func.dtype
+#   @property
+#   def shape(self): return self.func.shape
 
 class Print(Node):
   def __init__(self, data):
-    self.data = data
+    self.update_sources(data)
   @property
-  def sources(self): return (self.data,)
-  @sources.setter
-  def sources(self, sources): self.data = sources[0]
-  @property
-  def dtype(self): return self.data.dtype
-  @property
-  def shape(self): return self.data.shape
+  def data(self): return self.sources[0]
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    self._view = self.data.view
 
 ### Pattern Matching ###
 
@@ -227,8 +238,8 @@ def rewrite_arrays(graph:list[Node], assignments:dict[Array, Assign]=None) -> li
   if (first_call := assignments is None): assignments = {}
   for node in graph:
     if isinstance(node, (Assign, Var)): continue
-    for i in range(len(node.sources)):
-      source = node.sources[i]
+    new_sources = list(node.sources)
+    for i, source in enumerate(node.sources):
       if isinstance(source, Array):
         if source in assignments:
           var = assignments[source].var
@@ -236,14 +247,13 @@ def rewrite_arrays(graph:list[Node], assignments:dict[Array, Assign]=None) -> li
           var = Var(source, "arr")
           assign = Assign(var)
           assignments[source] = assign
-
-        s = list(node.sources)
-        s[i] = var
-        node.sources = tuple(s)
+        source = var
+        new_sources[i] = var
+    node.update_sources(new_sources)
     rewrite_arrays(node.sources, assignments)
   if first_call: return list(assignments.values()) + graph
 
-# Propogates an Index node down the graph if its children are not data nodes (Array / Var)
+# Propagates an Index node down the graph if its children are not data nodes (Array / Var)
 # and combines indexing nodes into a single Index node
 def propagate_indexing(index:Index, current:Node=None) -> Node:
   if current is None: current = index
@@ -258,7 +268,7 @@ def propagate_indexing(index:Index, current:Node=None) -> Node:
     current = propagate_indexing(index, index.data)
   if isinstance(current, (Array, Var)): return Index(current, index.indices)
       
-  current.sources = tuple(propagate_indexing(index, s) for s in current.sources)
+  current.update_sources(propagate_indexing(index, s) for s in current.sources)
   return current
 
 # Converts Array into Index nodes and adds Range nodes
@@ -271,13 +281,14 @@ def lower_graph(graph:list[Node], indices:list[Assign]=[]) -> list[Node]:
       lowered_graph.append(node)
       continue
     new_indices = [Var(0, "idx") for _ in range(len(node.shape) - len(indices))]
-    shape = node.shape
+    dims = node.shape
     if isinstance(node, (Array, Var)):
       node = Index(node, indices + new_indices)
+      print("Making index", node.sources)
     elif node.sources:
-      node.sources = lower_graph(node.sources, indices + new_indices)
-    for idx, dim in zip(new_indices, shape):
-      node = Loop(0, dim, 1, node, idx)
+      node.update_sources(lower_graph(node.sources, indices + new_indices))
+    for idx, dim in zip(reversed(new_indices), reversed(dims)):
+      node = Loop(idx, dim, 1, node)
     lowered_graph.append(node)
   return lowered_graph
 
