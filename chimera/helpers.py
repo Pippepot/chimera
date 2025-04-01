@@ -1,6 +1,25 @@
 from typing import TypeVar, Iterable
+import sys, os
 import functools, operator
 T = TypeVar("T")
+
+ARGS = {k.upper(): v for k, v in (arg.split('=') for arg in sys.argv[1:] if '=' in arg)}
+
+class CompileOption:
+    value: int
+    key: str
+    def __init__(self, key:str, default_value:int=0):
+        self.key = key.upper()
+        self.value = ARGS.get(self.key, os.getenv(self.key, default_value))
+        try: self.value = int(self.value)
+        except ValueError:
+            raise ValueError(f"Invalid value for {self.key}: {self.value}. Expected an integer.")
+    def __bool__(self): return bool(self.value)
+    def __ge__(self, x): return self.value >= x
+    def __gt__(self, x): return self.value > x
+    def __lt__(self, x): return self.value < x
+
+DEBUG, OPTIMIZE = CompileOption("DEBUG"), CompileOption("OPTIMIZE", 1)
 
 def prod(x:Iterable[T]) -> T|int: return functools.reduce(operator.mul, x, 1)
 def tupled(x) -> tuple: return tuple(x) if isinstance(x, Iterable) else (x,)

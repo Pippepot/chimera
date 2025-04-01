@@ -23,9 +23,6 @@ dtype_to_str = {dtypes.int32:'int', dtypes.float32:'float', None:'void'}
 #   return f"{dtype_to_str[None]} {name}({arg_string}) {{\n{append_indent(ctx[func.body], ';')}\n}}"
 def render_index(ctx, indexer:Index):
   rend = f"{ctx[indexer.data]}"
-  # *(data0+idx0*stride0+idx1*stride1)
-  print(indexer.indices)
-  print(indexer.data.view.strides)
   for i,idx in enumerate(indexer.indices):
     rend = f"{rend} + {ctx[idx]}*{indexer.data.view.strides[i]}"
   return f"*({rend})"

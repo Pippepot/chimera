@@ -1,9 +1,19 @@
 from __future__ import annotations
 from typing import Callable
 from chimera.dtype import DType, dtypes
-from chimera.helpers import fully_flatten, get_shape, all_same, all_instance, listed
+from chimera.helpers import DEBUG, fully_flatten, get_shape, all_same, all_instance, listed
 from chimera.view import View
-import inspect, functools
+import inspect
+
+def print_graph(nodes:list[Node]):
+  var_count = []
+  for n in nodes: n.print_tree(var_count)
+
+def print_procedure(nodes:list[Node]):
+  for i,n in enumerate(nodes):
+    formatted_parents = [nodes.index(x) if x in nodes else "--" for x in n.sources]
+    print(f"{i:4d} {str(n):20s}: {str(n.dtype):8s} {str(formatted_parents):16s}")
+
 
 ### Graph Nodes ###
 
@@ -26,17 +36,9 @@ class Node():
     assert not self.sources or len(self.sources) == len(sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(sources)}"
     self._sources = sources
 
-  def copy_with_sources(self, new_sources: tuple[Node]) -> Node:
-    """Create a new node with the same attributes but different sources"""
-    new_node = self.__class__.__new__(self.__class__)
-    for key, value in self.__dict__.items():
-      if key not in ['_sources']: setattr(new_node, key, value)
-    new_node._sources = new_sources
-    return new_node
-
-  def print_tree(self):
+  def print_tree(self, var_count:list[Node]=None):
+    if not var_count: var_count = []
     string = self.__repr__() + "\n"
-    var_count = []
     for i, source in enumerate(self.sources): string += source._get_print_tree(var_count, i == len(self.sources) - 1)
     print(string)
 
@@ -90,7 +92,6 @@ class Assign(Node):
 class Array(Node):
   def __init__(self, data:list):
     self._view = View.create(get_shape(data))
-    print(self.view)
     self._data = fully_flatten(data)
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
     self._dtype = dtypes.python_to_dtype[type(self.data[0])]
@@ -284,7 +285,6 @@ def lower_graph(graph:list[Node], indices:list[Assign]=[]) -> list[Node]:
     dims = node.shape
     if isinstance(node, (Array, Var)):
       node = Index(node, indices + new_indices)
-      print("Making index", node.sources)
     elif node.sources:
       node.update_sources(lower_graph(node.sources, indices + new_indices))
     for idx, dim in zip(reversed(new_indices), reversed(dims)):
@@ -304,14 +304,18 @@ def linearize(ast:list[Node]) -> set[Node]:
     node.terminal = True
     get_children_dfs(node, visited)
     visited[node] = None
-  return list(visited)
+  visited = list(visited)
+  if DEBUG >= 2: print_procedure(visited)
+  return visited
 
 def parse_ast(ast:list[Node]):
+  if DEBUG:
+    print("GRAPH")
+    print_graph(ast)
   ast = [ast] if isinstance(ast, Node) else ast
   ast = rewrite_arrays(ast)
-  print("REWRITE ARRAYS")
-  for node in ast: node.print_tree()
   ast = lower_graph(ast)
-  print("LOWER")
-  for node in ast: node.print_tree()
+  if DEBUG >= 2:
+    print("LOWERED GRAPH")
+    print_graph(ast)
   return linearize(ast)
