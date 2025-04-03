@@ -1,5 +1,5 @@
 from __future__ import annotations
-from chimera.graph import Node, Print, BinaryOp, Index, Array, Var, Assign, Const, Loop, PatternMatcher, Pat
+from chimera.graph import Node, Print, BinaryOp, Index, Array, Var, Assign, Const, Loop, Expand, PatternMatcher, Pat
 from chimera.dtype import dtypes
 
 node_patterns: dict = {
@@ -38,7 +38,8 @@ render_patterns = PatternMatcher([
   (Pat(Var, name='x'), lambda ctx, x: f'{x.name}{ctx[x.name]}'),
   (Pat(Assign, name='x'), lambda ctx, x: f'{dtype_to_str[x.var.dtype]} {ctx[x.var]}{"[]" if x.var.shape != () else ""}={ctx[x.var.data]}'),
   (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]}; {ctx[x.idx]}<{ctx[x.stop]}; {ctx[x.idx]}+={ctx[x.step]}) {{\n {append_indent(ctx[x.scope], ';')}\n}}"),
-  (Pat(Index, name='x'), lambda ctx, x: render_index(ctx,x)), # do strides in future and loop over all indices
+  (Pat(Expand, name='x'), lambda ctx, x: ctx[x.node]),
+  (Pat(Index, name='x'), lambda ctx, x: render_index(ctx,x)),
   # (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.func]}({', '.join(ctx[arg] for arg in x.args)})"),
   (Pat(Print, sources=Pat(Node, name='x')), lambda ctx, x: r'printf("%d\n",' + f'{ctx[x]})'),
   (Pat(BinaryOp, name='x'), lambda ctx, x: node_patterns[x.op](

@@ -13,14 +13,31 @@ Array features:
 Language features
   function, exp, log, sqrt, sin, cos, abs, input, min, max comparisons, bool
   branch, strings
-Pretty print linearized program
+
+Redo graph rewrites?
+  tinygrad uops are immutable. All changes to uops are through entire graph rewrites
+  NEVERMIND tinygrad uops outside graph rewrites
+  not all uops have views (only loads?)
+  All uops have the same structure (op, dtype, src, args) which makes cloning a uop possible
+  Rewrite nodes in tinygrad style??
+
+  Rewrite rules
+    Bottom up
+      Can change shape/view on self
+      Cannot change shape/view of children
+    Top down
+      Cannot change shape/view of self
+      Can change shape/view of children
+
+  We go top down
+  Indices can propagate down, parent shapes should not depend on child shapes during rewrite
 """
 
 DEBUG.value = 2
 
 def main():
   ast = [
-    Print(BinaryOp('*', Array([[[1, 2],[3, 4]],[[5, 6],[7, 8]]]), Const(2)))
+    Print(BinaryOp('*', Array([[[1, 2],[3, 4]],[[5, 6],[7, 8]]]), Array([2])))
   ]
   
   if DEBUG:
@@ -28,7 +45,7 @@ def main():
   procedure = parse_ast(ast)
   code, functions = renderer.render(procedure)
   if DEBUG:
-    print(f"Chimera compile\t{time.perf_counter() - compile_timer:.4f}ms")
+    print(f"Chimera compile\t{time.perf_counter() - compile_timer:.4f}s")
   result = compiler.compile(code, functions)
   print(result)
 

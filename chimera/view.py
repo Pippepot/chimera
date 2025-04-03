@@ -20,8 +20,9 @@ class View():
 
   @staticmethod
   @functools.lru_cache(maxsize=None)
-  def create(shape:tuple[int, ...]=()) -> View:
+  def create(shape:tuple[int, ...]=(), strides:tuple[int, ...]=None) -> View:
     shape = shape
-    strides = strides_for_shape(shape)
+    if not strides: strides = strides_for_shape(shape)
+    assert len(shape) == len(strides), f"Length mismatch between shape({len(shape)} and strides({len(strides)})"
     offset = 0
     return View(shape, strides, offset)

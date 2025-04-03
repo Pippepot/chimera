@@ -1,13 +1,13 @@
 from __future__ import annotations
 from typing import Callable
 from chimera.dtype import DType, dtypes
-from chimera.helpers import DEBUG, fully_flatten, get_shape, all_same, all_instance, listed
+from chimera.helpers import DEBUG, fully_flatten, get_shape, all_same, all_instance, listed, prod
 from chimera.view import View
 import inspect
 
 def print_graph(nodes:list[Node]):
-  var_count = []
-  for n in nodes: n.print_tree(var_count)
+  visited, var_count = set(), []
+  for n in nodes: n.print_tree(visited, var_count)
 
 def print_procedure(nodes:list[Node]):
   for i,n in enumerate(nodes):
@@ -36,20 +36,23 @@ class Node():
     assert not self.sources or len(self.sources) == len(sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(sources)}"
     self._sources = sources
 
-  def print_tree(self, var_count:list[Node]=None):
-    if not var_count: var_count = []
+  def print_tree(self, visited:set[Node]=None, var_count:list[Node]=None):
+    if var_count is None: var_count = []
+    if visited is None: visited = set()
     string = self.__repr__() + "\n"
-    for i, source in enumerate(self.sources): string += source._get_print_tree(var_count, i == len(self.sources) - 1)
+    for i, source in enumerate(self.sources): string += source._get_print_tree(visited, var_count, i == len(self.sources) - 1)
     print(string)
 
-  def _get_print_tree(self, var_count:list[Node], is_last:bool, indent:str = ''):
+  def _get_print_tree(self, visited:set[Node], var_count:list[Node], is_last:bool, indent:str = ''):
     node_str = self.__repr__()
     if isinstance(self, Var):
       if self not in var_count: var_count.append(self)
       node_str += f" {var_count.index(self)}"
     tree_str = indent + ("└─" if is_last else "├─") + node_str + "\n"
     indent += "  " if is_last else "│ "
-    for i, source in enumerate(self.sources): tree_str += source._get_print_tree(var_count, i == len(self.sources) - 1, indent)
+    if self in visited: return tree_str
+    visited.add(self)
+    for i, source in enumerate(self.sources): tree_str += source._get_print_tree(visited, var_count, i == len(self.sources) - 1, indent)
     return tree_str
 
   def __repr__(self): return self.__class__.__name__
@@ -99,7 +102,7 @@ class Array(Node):
   def data(self) -> Node: return self._data
 
 class Index(Node):
-  def __init__(self, data:Node, indices):
+  def __init__(self, data:Node, indices:int|list[int]):
     self.update_sources([data] + [i if isinstance(i, Node) else Const(i) for i in listed(indices)])
   @property
   def data(self) -> Node: return self.sources[0]
@@ -141,15 +144,51 @@ class BinaryOp(Node):
   def left(self): return self.sources[0]
   @property
   def right(self): return self.sources[1]
+
   def update_sources(self, sources):
     super().update_sources(sources)
-    shape = self.left.shape
-    # Need to broadcast in the future
-    if len(self.left.shape) < len(self.right.shape): shape = self.right.shape
-    elif len(self.left.shape) == len(self.right.shape): tuple(max(l, r) for l, r in zip(self.left.shape, self.right.shape))
-    self._view = View.create(shape)
-    self._dtype = self.left.dtype
+    views = [self.left.view, self.right.view]
+    self._sources = [s if s.view == v else Expand(s, v) for s,v in zip(self.sources, self._broadcast_views(views))]
+    self._view = self.left.view
+    self._dtype = self.left.dtype # TODO resolve better
+  def _broadcast_views(self, views_in:tuple[View]) -> tuple[View]:
+    empty_idx:list[int] = []
+    views:list[View] = []
+    for i,view in enumerate(views_in):
+      if view.shape == (): empty_idx.append(i)
+      else: views.append(view)
+    if not len(views): return views_in
+
+    max_shape = max(len(view.shape) for view in views)
+    # Left align shapes
+    shapes = [(1,)*(max_shape - len(view.shape)) + view.shape for view in views]
+    strides = [(0,)*(max_shape - len(view.strides)) + view.strides for view in views]
+    new_shape = tuple(max(shape[i] for shape in shapes) for i in range(max_shape))
+    assert all(all(dim == 1 or dim == new_dim for dim,new_dim in zip(shape, new_shape)) for shape in shapes),\
+      f"Cannot broadcast shapes {(v.shape for v in views)}"
+    return tuple(View.create(new_shape, stride) for stride in strides)
   def __repr__(self): return f"{super().__repr__()} {self.op}"
+
+class Expand(Node):
+  def __init__(self, node:Node, view:View):
+    self._view = view
+    self.update_sources(node)
+  @property
+  def node(self) -> Node: return self.sources[0]
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    self._dtype = self.node.dtype
+
+class Reshape(Node):
+  def __init__(self, node:Node, view:View):
+    self._view = view
+    self.update_sources(node)
+  @property
+  def node(self) -> Node: return self.sources[0]
+  def update_sources(self, sources):
+    super().update_sources(sources)
+    self._dtype = self.node.dtype
+    assert prod(self.node.shape) == prod(self.shape), f"Cannot reshape {self.node.shape} to {self.shape} as they differ in size ({prod(self.node.shape)}, {prod(self.shape)})"
 
 # class Function(Node):
 #   def __init__(self, args, body):
@@ -189,7 +228,7 @@ class Print(Node):
 ### Pattern Matching ###
 
 class Pat():
-  __slots__ = ["type", "predicate",  "name", "sources"]
+  __slots__ = ["type", "predicate", "name", "sources"]
   def __init__(self, type:type|tuple[type], predicate:Callable[[Node], bool]=None, name:str=None, sources:Pat|tuple[Pat]=None):
     self.type:tuple[type] = type if isinstance(type, tuple) or type is None else (type,)
     self.predicate = predicate
@@ -265,9 +304,9 @@ def propagate_indexing(index:Index, current:Node=None) -> Node:
       if unaccounted_indices <= 0: index = current
       else: index = Index(current.data, current.indices + index.indices[:unaccounted_indices])
     # Early exit if current is a data node
-    if isinstance(index.data, (Array, Var)): return index
+    if isinstance(index.data, (Array, Var, Reshape)): return index
     current = propagate_indexing(index, index.data)
-  if isinstance(current, (Array, Var)): return Index(current, index.indices)
+  if isinstance(current, (Array, Var, Reshape)): return Index(current, index.indices)
       
   current.update_sources(propagate_indexing(index, s) for s in current.sources)
   return current
@@ -283,7 +322,7 @@ def lower_graph(graph:list[Node], indices:list[Assign]=[]) -> list[Node]:
       continue
     new_indices = [Var(0, "idx") for _ in range(len(node.shape) - len(indices))]
     dims = node.shape
-    if isinstance(node, (Array, Var)):
+    if isinstance(node, (Array, Var, Expand)):
       node = Index(node, indices + new_indices)
     elif node.sources:
       node.update_sources(lower_graph(node.sources, indices + new_indices))
@@ -312,8 +351,7 @@ def parse_ast(ast:list[Node]):
   if DEBUG:
     print("GRAPH")
     print_graph(ast)
-  ast = [ast] if isinstance(ast, Node) else ast
-  ast = rewrite_arrays(ast)
+  ast = rewrite_arrays(listed(ast))
   ast = lower_graph(ast)
   if DEBUG >= 2:
     print("LOWERED GRAPH")

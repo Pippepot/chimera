@@ -11,10 +11,10 @@ def compile(code, functions):
   opt = '-O3' if OPTIMIZE else ''
   subprocess.run(['clang', opt, '-Wall', '-Werror', '-x', 'c', '-', '-o', "program.exe"], input=code.encode('utf-8'))
   if DEBUG:
-    print(f"Clang compile\t{time.perf_counter() - clang_timer:.4f}ms")
+    print(f"Clang compile\t{time.perf_counter() - clang_timer:.4f}s")
     runtime_timer = time.perf_counter()
 
   result = subprocess.run(['./program.exe'], capture_output=True, text=True)
   if DEBUG:
-    print(f"Ran in\t\t{time.perf_counter() - runtime_timer:.4f}ms")
+    print(f"Ran in\t\t{time.perf_counter() - runtime_timer:.4f}s")
   return result.stdout
