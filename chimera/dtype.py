@@ -1,16 +1,19 @@
+from dataclasses import dataclass
+from typing import Literal, Optional
+
+FmtStr = Literal['?', 'b', 'B', 'h', 'H', 'i', 'I', 'q', 'Q', 'e', 'f', 'd']
+
+@dataclass(frozen=True, eq=False)
 class DType:
-  def __init__(self, base: str):
-    self.base = base
-  def __eq__(self, other):
-    if not isinstance(other, DType):
-      return False
-    return self.base == other.base
-  def __hash__(self): return hash(self.base)
-  def __repr__(self): return self.base
+  itemsize: int
+  name: str
+  fmt: Optional[FmtStr]
+
+  def new(itemsize:int, name:str, fmt:Optional[FmtStr]): return DType(itemsize, name, fmt)
 
 class dtypes:
-  int32 = DType("int")
-  float32 = DType("float")
-  void = DType("void")
+  int32 = DType(4, "int", 'i')
+  float32 = DType(4, "float", 'f')
+  void = DType(0, "void", None)
 
   python_to_dtype = {int:int32, float:float32}

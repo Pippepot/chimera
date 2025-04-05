@@ -37,7 +37,7 @@ DEBUG.value = 2
 
 def main():
   ast = [
-    Print(BinaryOp('*', Array([[[1, 2],[3, 4]],[[5, 6],[7, 8]]]), Array([2])))
+    Print(Array([[1,2,3], [10,20,30]]))
   ]
   
   if DEBUG:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import functools, itertools, operator
+from helpers import prod
 from dataclasses import dataclass
 
 @functools.lru_cache(maxsize=None)
@@ -26,3 +27,5 @@ class View():
     assert len(shape) == len(strides), f"Length mismatch between shape({len(shape)} and strides({len(strides)})"
     offset = 0
     return View(shape, strides, offset)
+  @property
+  def size(self) -> int: return prod(self.shape)
