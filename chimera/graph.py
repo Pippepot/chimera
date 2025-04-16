@@ -59,12 +59,20 @@ class Node():
     for i, source in enumerate(self.sources): tree_str += source._get_print_tree(visited, var_count, i == len(self.sources) - 1, indent)
     return tree_str
 
+  @staticmethod
+  def to_node(x): return x if isinstance(x, Node) else Const(x)
+
   def __repr__(self): return self.__class__.__name__
+  def __add__(self, x): return BinaryOp('+', self, Node.to_node(x))
+  def __sub__(self, x): return BinaryOp('-', self, Node.to_node(x))
+  def __mul__(self, x): return BinaryOp('*', self, Node.to_node(x))
+  def __truediv__(self, x): return BinaryOp('/', self, Node.to_node(x))
+  def __getitem__(self, key): return Index(self, key)
 
 class Const(Node):
   def __init__(self, value):
-    assert isinstance(value, (int, float, Const)), f"Const node can only have values of type int, float, Const. Type was {type(value)}"
-    self._arg = value.value if isinstance(value, Const) else value
+    assert isinstance(value, (int, float)), f"Const node can only have values of type int, float. Type was {type(value)}"
+    self._arg = value
     self._dtype = dtypes.python_to_dtype[type(self.value)]
   @property
   def value(self): return self._arg
@@ -72,9 +80,8 @@ class Const(Node):
 
 class Var(Node):
   def __init__(self, data:Node, name:str="var"):
-    if not isinstance(data, Node): data = Const(data)
-    assert data, "data should not be none"
-    self._sources = (data,)
+    assert data != None, "data should not be none"
+    self._sources = (Node.to_node(data),)
     self._view = self.data.view
     self._dtype = self.data.dtype
     self._arg = name
@@ -125,7 +132,7 @@ class Array(Node):
 
 class Index(Node):
   def __init__(self, data:Node, indices:int|list[int]):
-    self._sources = (data,) + tuple(i if isinstance(i, Node) else Const(i) for i in tupled(indices))
+    self._sources = (data,) + tuple(map(Node.to_node, listed(indices)))
     self._view = View.create(self.data.shape[len(self.indices):]) #TODO probs not correct
     self._dtype = self.data.dtype
   @property
@@ -135,8 +142,8 @@ class Index(Node):
 
 class Loop(Node):
   def __init__(self, start:Var|Const, stop:Const, scope:Node):
-    if not isinstance(start, Var): start = Var(Const(start), "idx")
-    self._sources = (Assign(start), Const(stop), scope)
+    if not isinstance(start, Var): start = Var(Node.to_node(start), "idx")
+    self._sources = (Assign(start), Node.to_node(stop), scope)
     self._view = self.scope.view
   @property
   def assign(self) -> Assign: return self.sources[0]
@@ -178,7 +185,9 @@ class BinaryOp(Node):
     new_shape = tuple(max(shape[i] for shape in shapes) for i in range(max_shape))
     assert all(all(dim == 1 or dim == new_dim for dim,new_dim in zip(shape, new_shape)) for shape in shapes),\
       f"Cannot broadcast shapes {(v.shape for v in views)}"
-    return tuple(View.create(new_shape, stride) for stride in strides)
+    views = [View.create(new_shape, stride) for stride in strides]
+    for i in empty_idx: views.insert(i, View.create())
+    return tuple(views)
   def __repr__(self): return f"{super().__repr__()} {self.op}"
 
 class Expand(Node):
@@ -190,16 +199,15 @@ class Expand(Node):
   @property
   def node(self) -> Node: return self.sources[0]    
 
-# class Reshape(Node):
-#   def __init__(self, node:Node, view:View):
-#     self._view = view
-#     self.update_sources(node)
-#   @property
-#   def node(self) -> Node: return self.sources[0]
-#   def update_sources(self, sources):
-#     super().update_sources(sources)
-#     self._dtype = self.node.dtype
-#     assert prod(self.node.shape) == prod(self.shape), f"Cannot reshape {self.node.shape} to {self.shape} as they differ in size ({prod(self.node.shape)}, {prod(self.shape)})"
+class Reshape(Node):
+  def __init__(self, node:Node, shape:tuple[int, ...]):
+    assert prod(node.shape) == prod(shape), f"Cannot reshape {node.shape} to {shape} as they differ in size ({prod(node.shape)}, {prod(shape)})"
+    self._sources = (node,)
+    self._view = View.create(shape) # TODO: take previous view into account
+    self._dtype = self.node.dtype
+  @property
+  def node(self) -> Node: return self.sources[0]
+    
 
 # class Function(Node):
 #   def __init__(self, args, body):
@@ -238,19 +246,25 @@ class Print(Node):
 T = TypeVar('T', bound=Node)
 
 class Pat():
-  __slots__ = ["type", "predicate", "name", "sources"]
-  def __init__(self, type:type[T]|tuple[type[T]]=None, predicate:Callable[[T], bool]=None, name:str=None, sources:Pat|tuple[Pat]=None):
+  __slots__ = ["type", "predicate", "name", "sources", "fuzzy_source_match"]
+  def __init__(self, type:type[T]|tuple[type[T]]=None, predicate:Callable[[T], bool]=None,
+               name:str=None, sources:Pat|tuple[Pat]=None, fuzzy_source_match:bool=False):
     if type is None: type = (Node,)
     self.type:tuple[type] = type if isinstance(type, tuple) else (type,)
     self.predicate = predicate
     self.name = name
     self.sources:tuple[Pat] = sources if isinstance(sources, tuple) or sources is None else (sources,)
+    self.fuzzy_source_match = fuzzy_source_match
   def match(self, node:Node, args:dict[str, Node|tuple[Node]]) -> bool:
     if (not any(isinstance(node, t) for t in self.type)) or \
      (self.predicate is not None and not self.predicate(node)): return False
     if self.sources is not None:
-      if len(self.sources) != len(node.sources): return False
-      if not all([pat.match(source, args) for pat, source in zip(self.sources, node.sources)]): return False
+      if self.fuzzy_source_match:
+        if len(self.sources) > len(node.sources): return False
+        if not all(pat.match(source, args) for pat, source in zip(self.sources, node.sources[:len(self.sources)])): return False
+      else:
+        if len(self.sources) != len(node.sources): return False
+        if not all(pat.match(source, args) for pat, source in zip(self.sources, node.sources)): return False
     if self.name is not None: args[self.name] = node
     return True
   def __repr__(self):
@@ -280,7 +294,7 @@ def refactor_print(ctx:RewriteContext, x:Print) -> Var:
   ctx.pre[x] = Assign(var)
   ctx.post[x] = Print(var)
   ctx.post[x.data] = Free(var)
-  return Store(var, x.data)
+  return create_loop(Store(var, x.data))
 def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   sources = list(parent.sources)
   for i,arr in enumerate(parent.sources): 
@@ -291,29 +305,54 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
     sources[i] = ctx.pre[arr].var
   return None if sources == list(parent.sources) else parent.copy(sources)
 def create_loop(node:Node) -> Loop:
-  stop = Const(prod(node.shape))
-  return Loop((idx:=Var(0, "idx")), stop, Index(node, idx))
+  indices = [Var(0, "idx") for _ in range(len(node.shape))]
+  shape = node.shape
+  node = Index(node, indices)
+  for idx,dim in zip(indices, shape):
+    node = Loop(idx, dim, node)
+  return node
 def propagate_index(idx:Index) -> Node:
-   sources = map(lambda x: Index(x, idx.indices), idx.data.sources)
+   sources = map(lambda x: x if x.shape == () else Index(x, idx.indices), idx.data.sources)
    n = idx.data.copy(sources, idx.data._arg, idx.data.dtype, idx.view)
    return n
+def rewrite_index(idx: Index, reshape: Reshape) -> Index:
+    print(f"REWRITE: {idx} -> {reshape}")
+    # Compute the flat index from idx.indices in the new (reshaped) space.
+    flat_index = Const(0)
+    for index_node, stride in zip(idx.indices, reshape.view.strides):
+        term = BinaryOp("*", index_node, Const(stride))
+        flat_index = BinaryOp("+", flat_index, term)
+
+    # Convert the flat index to multi-dimensional indices for the original shape.
+    new_indices = []
+    remaining = flat_index
+    for stride in reshape.node.view.strides:
+        quotient = BinaryOp("/", remaining, Const(stride))
+        new_indices.append(quotient)
+        remaining = BinaryOp("%", remaining, Const(stride))
+    
+    # Return an Index node using the original node and the new multi-dimensional indices.
+    return Index(reshape.node, new_indices)
 
 base_rewrite = PatternMatcher([
-  # Move array to assignments
-  # Propagate indexing down the graph
+  # Refactor print statements to use malloc/free
   (Pat(Print, predicate=lambda x: x.data.shape != (), name="x"), refactor_print),
-  (Pat(Index, name="idx", sources=(Pat((BinaryOp, Store)), Pat())), propagate_index),
-  (Pat(Index, name="idx1", sources=(Pat(Index, name="idx2"), Pat())), lambda idx1,idx2: Index(idx2.data, idx1.indices + idx2.indices)),
-  (Pat((BinaryOp, Store), predicate=lambda x: x.shape != (), name="x"), lambda x: create_loop(x)),
-  (Pat((Index, BinaryOp), name="parent"), assign_array),
+  # Propagate indexing down the graph
+  (Pat(Index, name="idx", sources=(Pat(Reshape, name="reshape")), fuzzy_source_match=True), rewrite_index),
+  (Pat(Index, name="idx", sources=(Pat((BinaryOp, Store))), fuzzy_source_match=True), propagate_index),
+  (Pat(Index, name="idx1", sources=(Pat(Index, name="idx2")), fuzzy_source_match=True), lambda idx1,idx2: Index(idx2.data, idx1.indices + idx2.indices)),
   # Create ranges to lower indices in the graph
+  # (Pat((BinaryOp, Store), predicate=lambda x: x.shape != (), name="x"), lambda x: create_loop(x)),
+  # Move array to assignments
+  (Pat((Index, BinaryOp, Expand, Reshape), name="parent"), assign_array),
 ])
 
 def rewrite_graph(n:Node, rewriter:PatternMatcher, ctx=None, replace:dict[Node, Node]=None) -> Node:
   if replace is None: replace = {}
   elif (rn := replace.get(n)) is not None: return rn
   new_n:Node = n
-  while new_n is not None: last_n, new_n = new_n, rewriter.rewrite(new_n, ctx)
+  while new_n is not None:
+    last_n, new_n = new_n, rewriter.rewrite(new_n, ctx)
   new_src = tuple(rewrite_graph(node, rewriter, ctx) for node in last_n.sources)
   replace[n] = ret = last_n if new_src == last_n.sources else rewrite_graph(last_n.copy(new_src), rewriter, ctx)
   return ret
@@ -337,7 +376,7 @@ def linearize(ast:list[Node]) -> set[Node]:
 def parse_ast(ast:list[Node]):
   if DEBUG:
     print("GRAPH")
-    print_graph(ast)
+    print_graph(ast)    
   ast = rewrite_graph(ast[0], base_rewrite, (context:=RewriteContext()))
   ast = list(context.pre.values()) + [ast] + list(context.post.values()) 
   if DEBUG >= 2:

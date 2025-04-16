@@ -10,10 +10,12 @@ def compile(code, functions):
     clang_timer = time.perf_counter()
 
   opt = '-O3' if OPTIMIZE else ''
-  subprocess.run(['clang', opt, '-Wall', '-Werror', '-x', 'c', '-', '-o', "program.exe"], input=f'{libs}{main}'.encode('utf-8'))
+  process = subprocess.run(['clang', opt, '-Wall', '-Werror', '-x', 'c', '-', '-o', "program.exe"], input=f'{libs}{main}'.encode('utf-8'))
   if DEBUG:
     print(f"Clang compile\t{time.perf_counter() - clang_timer:.4f}s")
     runtime_timer = time.perf_counter()
+
+  if process.returncode != 0: return "Compilation failed"
 
   result = subprocess.run(['./program.exe'], capture_output=True, text=True)
   if DEBUG:

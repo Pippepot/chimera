@@ -7,6 +7,7 @@ node_patterns: dict = {
   '-': lambda a,b: f"({a}-{b})",
   '*': lambda a,b: f"({a}*{b})",
   '/': lambda a,b: f"({a}/{b})",
+  '%': lambda a,b: f"({a}%{b})",
 }
 
 class NodeGroup:
@@ -23,6 +24,7 @@ dtype_to_str = {dtypes.int32:'int', dtypes.float32:'float', None:'void'}
 #   return f"{dtype_to_str[None]} {name}({arg_string}) {{\n{append_indent(ctx[func.body], ';')}\n}}"
 def render_index(ctx, x:Index):
   rend = f"{ctx[x.data]}"
+  assert len(x.indices) == len(x.data.shape) == len(x.data.view.strides), f"Indexing {x.data} with {x.indices}"
   for i,idx in enumerate(x.indices):
     rend = f"{rend} + {ctx[idx]}*{x.data.view.strides[i]}"
   return f"*({rend})"
@@ -44,10 +46,10 @@ render_patterns = PatternMatcher([
   (Pat(Var, name='x'), lambda ctx, x: f'{x.name}{ctx[x.name]}'),
   (Pat(Assign, name='x'), render_assign),
   (Pat(Store, name='x'), lambda ctx, x: f"{ctx[x.data]} = {ctx[x.value]}"),
-  (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({x.size})"),
+  (Pat(Allocate, name='x'), lambda x: f"malloc({x.size})"),
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]})"),
-  (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]}; {ctx[x.idx]}<{ctx[x.stop]}; {ctx[x.idx]}++) {{\n {append_indent(ctx[x.scope], ';')}\n}}"),
-  (Pat(Expand, name='x'), lambda ctx, x: ctx[x.node]),
+  (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]}; {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n {append_indent(ctx[x.scope], ';')}\n}}"),
+  (Pat((Expand, Reshape), name='x'), lambda ctx, x: ctx[x.node]),
   (Pat(Index, name='x'), render_index),
   # (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.func]}({', '.join(ctx[arg] for arg in x.args)})"),
   (Pat(Print, sources=Pat(Node, name='x')), lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, {x.view.size}, (int[]){render_array(x.shape)}, {len(x.shape)}, (int[]){render_array(x.view.strides)}, "%{x.dtype.fmt}", {x.dtype.fmt}_fmt))'),
