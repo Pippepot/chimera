@@ -19,5 +19,5 @@ def compile(code, functions):
 
   result = subprocess.run(['./program.exe'], capture_output=True, text=True)
   if DEBUG:
-    print(f"Ran in\t\t{time.perf_counter() - runtime_timer:.4f}s")
+    print(f"Ran in\t\t{(time.perf_counter() - runtime_timer) * 1000:.1f}ms")
   return result.stdout
