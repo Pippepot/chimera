@@ -2,7 +2,7 @@ import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from chimera.nodes import *
 from chimera.graph import parse_ast
-from chimera.helpers import DEBUG
+from chimera.helpers import DEBUG, TRACK_REWRITES
 from chimera import compiler, renderer
 import time
 
@@ -15,18 +15,21 @@ Language features
   branch, strings, lists, tuples, dicts, sets, enums
 Graph features:
   Symbolic rewrites, constant folding, loop unrolling, loop fusion
+Debugging
+  Track rewrites
 """
 
-DEBUG.value = 2
+DEBUG.value = 0
+TRACK_REWRITES.value = 1
 
 def main():
   ast = [
     # Print(Reshape(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]), (1,3,1,2)) + 3),
     # Print(Const(0) + 4 * 5 * 20 + 40 + Array([1,2]))
     # Print(Array([[1,2,3],[4,5,6]]) * Array([5,2,10])),
-    Print(Expand(Array([5,2,10]), View.create((2,3)))),
+    Print(Array([[1, 2], [3, 4]]))
+    # Print(Expand(Array([5,2,10]), View.create((2,3)))),
   ]
-  
   if DEBUG:
     compile_timer = time.perf_counter()
   procedure = parse_ast(ast)

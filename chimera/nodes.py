@@ -8,11 +8,14 @@ import weakref
 class NodeMetaClass(type):
   node_cache:dict[tuple, weakref.ReferenceType[Node]] = {}
   def __call__(cls, *args, **kwargs):
-    node:Node = super().__call__(*args, **kwargs)
+    node:Node = super().__call__(*args)
     node._sources = getattr(node, "_sources", ())
     node._arg = getattr(node, "_arg", None)
     node._dtype = getattr(node, "_dtype", dtypes.void)
     node._view = getattr(node, "_view", View.create())
+    return NodeMetaClass.register(node)
+  @classmethod
+  def register(cls, node:Node) -> Node:
     key = (type(node), node._sources, node._arg, node._dtype)
     if not isinstance(node, Var) \
        and (wret := NodeMetaClass.node_cache.get(key, None)) is not None \
@@ -37,23 +40,25 @@ class Node(metaclass=NodeMetaClass):
   def shape(self) -> tuple[int, ...]: return self._view.shape
 
   def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, view:View=None) -> Node:
-    new_node:Node = self.__new__(self.__class__)
+    new_node:Node = self.__class__.__new__(self.__class__)
     new_node._sources = tupled(sources) if sources is not None else self._sources
     new_node._arg = arg if arg is not None else self._arg
     new_node._dtype = dtype if dtype is not None else self._dtype
     new_node._view = view if view is not None else self._view
+    new_node = NodeMetaClass.register(new_node)
     assert not self.sources or len(self.sources) == len(new_node.sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(new_node.sources)}"
     return new_node
 
-  def print_tree(self, visited:set[Node]=None, var_count:list[Node]=None):
+  def print_tree(self, visited:set[Node]=None, var_count:list[Node]=None): print(self.get_print_tree(visited, var_count))
+  def get_print_tree(self, visited:set[Node]=None, var_count:list[Node]=None, format_func:callable[str, Node]=None) -> str:
     if var_count is None: var_count = []
     if visited is None: visited = set()
+    if format_func is None: format_func = lambda x: x.__repr__()
     string = self.__repr__() + "\n"
-    for i, source in enumerate(self.sources): string += source._get_print_tree(visited, var_count, i == len(self.sources) - 1)
-    print(string)
-
-  def _get_print_tree(self, visited:set[Node], var_count:list[Node], is_last:bool, indent:str = ''):
-    node_str = self.__repr__()
+    for i, source in enumerate(self.sources): string += source._get_print_tree(visited, var_count, format_func, i == len(self.sources) - 1)
+    return string
+  def _get_print_tree(self, visited:set[Node], var_count:list[Node], format_func:callable[str, Node], is_last:bool, indent:str = ''):
+    node_str = format_func(self)
     if isinstance(self, Var):
       if self not in var_count: var_count.append(self)
       node_str += f" {var_count.index(self)}"
@@ -61,7 +66,7 @@ class Node(metaclass=NodeMetaClass):
     indent += "  " if is_last else "│ "
     if self in visited: return tree_str
     visited.add(self)
-    for i, source in enumerate(self.sources): tree_str += source._get_print_tree(visited, var_count, i == len(self.sources) - 1, indent)
+    for i, source in enumerate(self.sources): tree_str += source._get_print_tree(visited, var_count, format_func, i == len(self.sources) - 1, indent)
     return tree_str
 
   @staticmethod
@@ -139,7 +144,7 @@ class Array(Node):
 class Index(Node):
   def __init__(self, data:Node, indices:int|Var|list[int|Var]):
     indices = tuple(map(Node.to_node, listed(indices)))
-    assert data.shape != (), f"Cannot index a scalar {data}"
+    assert data.shape != (), f"Cannot index node with no shape {data}"
     assert len(indices) > 0, f"Cannot index {data} with no indices"
     indexer = indices[0] * data.view.strides[0]
     for i,idx in enumerate(indices[1:], 1):

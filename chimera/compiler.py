@@ -1,5 +1,6 @@
 import subprocess, os, time
-from chimera.helpers import DEBUG, OPTIMIZE
+from chimera.helpers import DEBUG
+import tempfile
 
 def compile(code, functions):
   with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib.c")) as file: lib = file.read()
@@ -9,15 +10,24 @@ def compile(code, functions):
     print(f"\n{code}")
     clang_timer = time.perf_counter()
 
-  opt = '-O3' if OPTIMIZE else ''
-  process = subprocess.run(['clang', opt, '-Wall', '-Werror', '-x', 'c', '-', '-o', "program.exe"], input=f'{libs}{main}'.encode('utf-8'))
-  if DEBUG:
-    print(f"Clang compile\t{time.perf_counter() - clang_timer:.4f}s")
-    runtime_timer = time.perf_counter()
+  with tempfile.NamedTemporaryFile(delete=False, suffix='.exe') as exe_file:
+    exe_path = exe_file.name
 
-  if process.returncode != 0: return "Compilation failed"
+  try:
+    process = subprocess.run(['clang', '-O3', '-Wall', '-Werror', '-x', 'c', '-', '-o', exe_path],input=f'{libs}{main}'.encode('utf-8'))
+    if DEBUG:
+      print(f"Clang compile\t{time.perf_counter() - clang_timer:.4f}s")
+      runtime_timer = time.perf_counter()
 
-  result = subprocess.run(['./program.exe'], capture_output=True, text=True)
-  if DEBUG:
-    print(f"Ran in\t\t{(time.perf_counter() - runtime_timer) * 1000:.1f}ms")
-  return result.stdout
+    if process.returncode != 0:
+      return "Compilation failed"
+
+    result = subprocess.run([exe_path], capture_output=True, text=True)
+    if DEBUG:
+      print(f"Ran in\t\t{(time.perf_counter() - runtime_timer) * 1000:.1f}ms")
+    return result.stdout
+  finally:
+    try:
+      os.remove(exe_path)
+    except Exception:
+      pass

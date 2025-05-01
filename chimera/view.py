@@ -1,6 +1,6 @@
 from __future__ import annotations
 import functools, itertools, operator
-from helpers import prod
+from chimera.helpers import prod
 from dataclasses import dataclass
 
 @functools.lru_cache(maxsize=None)
