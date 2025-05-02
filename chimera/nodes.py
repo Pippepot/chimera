@@ -8,7 +8,7 @@ import weakref
 class NodeMetaClass(type):
   node_cache:dict[tuple, weakref.ReferenceType[Node]] = {}
   def __call__(cls, *args, **kwargs):
-    node:Node = super().__call__(*args)
+    node:Node = super().__call__(*args, **kwargs)
     node._sources = getattr(node, "_sources", ())
     node._arg = getattr(node, "_arg", None)
     node._dtype = getattr(node, "_dtype", dtypes.void)
@@ -79,6 +79,10 @@ class Node(metaclass=NodeMetaClass):
   def __mod__(self, x): return BinaryOp('%', self, Node.to_node(x))
   def __truediv__(self, x): return BinaryOp('/', self, Node.to_node(x))
   def __getitem__(self, key): return Index(self, key)
+
+class Program(Node):
+  def __init__(self, nodes:list[Node]|Node):
+    self._sources = tupled(nodes)
 
 class Const(Node):
   def __init__(self, value):

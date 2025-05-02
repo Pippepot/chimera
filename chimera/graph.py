@@ -4,9 +4,6 @@ from chimera.helpers import DEBUG, TRACK_REWRITES, navigate_history
 from chimera.nodes import *
 import inspect, functools
 
-def print_graph(nodes:list[Node]):
-  visited, var_count = set(), []
-  print('\n'.join(n.get_print_tree(visited, var_count) for n in nodes))
 def print_procedure(nodes:list[Node]):
   for i,n in enumerate(nodes):
     formatted_parents = [nodes.index(x) if x in nodes else "--" for x in n.sources]
@@ -155,24 +152,23 @@ symbolic = PatternMatcher([
   (Pat.var("y") * Pat.var("x") / Pat.var("x"), lambda y, x: y), # (y*x)/x -> y
 ])
 
-def rewrite_ast(ast:list[Node], rewriter:PatternMatcher, ctx=None) -> list[Node]:
+def rewrite_ast(ast:Node, rewriter:PatternMatcher, ctx=None) -> Node:
   def rewrite_graph(n:Node, rewriter:PatternMatcher, ctx, tracker:list, position:tuple[int], replace:dict[Node, Node]=None) -> Node:
     if replace is None: replace = {}
-    elif (rn := replace.get(n)) is not None: 
-      # if tracker is not None: tracker.append((None, n, rn, position))
+    elif (rn := replace.get(n)) is not None:
       return rn
     new_n:Node = n; last_n:Node = None
     while new_n is not None:
       last_n, new_n = new_n, rewriter.rewrite(new_n, ctx, tracker)
-      if new_n is not None: tracker[-1] = tracker[-1] + (position,)
+      if tracker is not None and new_n is not None: tracker[-1] = tracker[-1] + (position,)
     new_src = tuple(rewrite_graph(node, rewriter, ctx, tracker, position + (i,), replace) for i,node in enumerate(last_n.sources))
     replace[n] = ret = last_n if new_src == last_n.sources else rewrite_graph(last_n.copy(new_src), rewriter, ctx, tracker, position, replace)
     return ret
   
   @functools.cache
-  def _get_graph(tracker:tuple, i:int) -> Node:
-    if i <= -1: return tracker[0][1]
-    node = _get_graph(tracker, i-1)
+  def _get_graph(tracker:tuple, root:Node, i:int) -> Node:
+    if i <= -1: return root
+    node = _get_graph(tracker, root, i-1)
     node_stack = [node]
     for pos in tracker[i][3][:-1]:
       node = node.sources[pos]
@@ -182,18 +178,20 @@ def rewrite_ast(ast:list[Node], rewriter:PatternMatcher, ctx=None) -> list[Node]
       new_graph = n.copy(n.sources[:pos] + (new_graph,) + n.sources[pos+1:])
     return new_graph
   @functools.cache
-  def _get_history_entry(tracker:tuple, i:int) -> str:
+  def _get_history_entry(tracker:tuple, root:Node, i:int) -> str:
     def format(node:Node, previous:set[Node]) -> str:
       return node.__repr__() if node in previous else f"\x1b[1m{node.__repr__()}\x1b[0m"
     pattern = f"{tracker[i][0]}\n" if i >= 0 else ""
-    return f"{pattern}{_get_graph(tracker, i).get_print_tree(set(), [], lambda x: format(x, linearize([_get_graph(tracker, i-1)])))}"
+    return f"{pattern}{_get_graph(tracker, root, i).get_print_tree(set(), [], lambda x: format(x, linearize(_get_graph(tracker, root, i-1))))}"
 
   tracker:list[tuple[Pat, Node, Node, tuple[int]]] = [] if TRACK_REWRITES else None
-  rewrite = [rewrite_graph(node, rewriter, ctx, tracker, tuple()) for node in ast]
-  if TRACK_REWRITES: navigate_history(lambda i: _get_history_entry(tuple(tracker), i-1), len(tracker) + 1)
+  rewrite = rewrite_graph(ast, rewriter, ctx, tracker, ())
+  if TRACK_REWRITES:
+    tracker = tuple(tracker)
+    navigate_history(lambda i: _get_history_entry(tracker, ast, i-1), len(tracker) + 1)
   return rewrite
 
-def linearize(ast:list[Node]) -> tuple[Node]:
+def linearize(ast:Node) -> tuple[Node]:
   def _get_children_dfs(node:Node, visited:dict[Node, None]):
     if node in visited: return
     for source in node.sources:
@@ -201,23 +199,21 @@ def linearize(ast:list[Node]) -> tuple[Node]:
     visited.update(dict.fromkeys(node.sources, None))
 
   visited:dict[Node, None] = {}
-  for node in ast:
-    _get_children_dfs(node, visited)
-    visited[node] = None
+  _get_children_dfs(ast, visited)
   visited = tuple(visited)
   if DEBUG >= 2: print_procedure(visited)
   return visited
 
 def parse_ast(ast:list[Node]|Node) -> tuple[Node]:
-  ast = listed(ast)
+  if not isinstance(ast, Program): ast = Program(ast)
   if DEBUG:
     print("GRAPH")
-    print_graph(ast)
+    ast.print_tree()
 
   ast = rewrite_ast(ast, base_rewrite, (context:=RewriteContext()))
-  ast = list(context.pre.values()) + ast + list(context.post.values())
-  # ast = rewrite_ast(ast, symbolic)
+  ast = Program(tuple(context.pre.values()) + ast.sources + tuple(context.post.values()))
+  ast = rewrite_ast(ast, symbolic)
   if DEBUG >= 2:
     print("LOWERED GRAPH")
-    print_graph(ast)
+    ast.print_tree()
   return linearize(ast)

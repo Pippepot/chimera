@@ -14,20 +14,18 @@ Language features
   function, exp, log, sqrt, sin, cos, abs, input, min, max comparisons, bool
   branch, strings, lists, tuples, dicts, sets, enums
 Graph features:
-  Symbolic rewrites, constant folding, loop unrolling, loop fusion
+  Symbolic rewrites, constant folding, loop unrolling, loop fusion, factorize common expressions
 Debugging
   Track rewrites
 """
 
-DEBUG.value = 0
-TRACK_REWRITES.value = 1
+DEBUG.value = 2
+TRACK_REWRITES.value = 0
 
 def main():
   ast = [
     # Print(Reshape(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]), (1,3,1,2)) + 3),
-    # Print(Const(0) + 4 * 5 * 20 + 40 + Array([1,2]))
     # Print(Array([[1,2,3],[4,5,6]]) * Array([5,2,10])),
-    Print(Array([[1, 2], [3, 4]]))
     # Print(Expand(Array([5,2,10]), View.create((2,3)))),
   ]
   if DEBUG:
