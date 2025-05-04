@@ -70,7 +70,8 @@ def render(procedure:set[Node]):
   for node in procedure:
     if isinstance(node, Var):
       ctx[node.name] = ctx.get(node.name, -1) + 1
-    rewrite = render_patterns.rewrite(node, ctx, tracker)
+    rewrite, pattern = render_patterns.rewrite(node, ctx)
+    if TRACK_REWRITES: tracker.append((pattern, node, rewrite))
     if rewrite is None:
       print("RENDER: Failed to parse", node)
       continue

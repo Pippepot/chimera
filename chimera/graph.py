@@ -71,14 +71,13 @@ class PatternMatcher:
     self.pdict: dict[Node, list[tuple[Pat, Callable[[any, Node], any], bool]]] = {}
     for pat, fxn in self.patterns:
       for node_type in pat.type: self.pdict.setdefault(node_type, []).append((pat, fxn, 'ctx' in inspect.signature(fxn).parameters))
-  def rewrite(self, node:Node, ctx=None, tracker:list[tuple[Pat, Node, any]]=None) -> any|None:
+  def rewrite(self, node:Node, ctx=None) -> tuple[any|None, Pat|None]:
     for p,fxn,has_ctx in self.pdict.get(type(node), []):
       vars = {}
       if p.match(node,  vars):
         rewritten = fxn(ctx=ctx, **vars) if has_ctx else fxn(**vars)
-        if tracker is not None and rewritten is not None: tracker.append((p, node, rewritten))
-        return rewritten 
-    return None
+        return rewritten, p
+    return None, None
 
 ### Graph Rewrite ###
 
@@ -86,13 +85,25 @@ class RewriteContext:
   def __init__(self):
     self.pre:dict[Node, Node] = {}
     self.post:dict[Node, Node] = {}
+    self.position:tuple[int] = ()
+    self.tracker:TrackedRewrite|None = TrackedRewrite() if TRACK_REWRITES else None
+
+class TrackedRewrite:
+  def __init__(self):
+    self._tracker:list[tuple[Pat, Node, tuple[int]]] = []
+  def get_pattern(self, step:int): return self._tracker[step][0]
+  def get_rewritten(self, step:int): return self._tracker[step][1]
+  def get_position(self, step:int): return self._tracker[step][2]
+  def track_step(self, pattern:Pat, rewritten:Node, position:tuple[int], step:int=None):
+    self._tracker.insert(len(self) if step is None else step, (pattern, rewritten, position))
+  def __len__(self): return len(self._tracker)
 
 def refactor_print(ctx:RewriteContext, x:Print) -> Var:
   var = Var(Allocate(x.data), "_print")
   ctx.pre[x] = Assign(var)
   ctx.post[x] = Print(var)
   ctx.post[x.data] = Free(var)
-  return create_loop(Store(var, x.data))
+  return create_loop(ctx, Store(var, x.data))
 def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   sources = list(parent.sources)
   for i,arr in enumerate(sources): 
@@ -102,12 +113,13 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
       ctx.pre[arr] = Assign(var)
     sources[i] = ctx.pre[arr].var
   return None if sources == list(parent.sources) else parent.copy(sources)
-def create_loop(node:Node) -> Loop:
+def create_loop(ctx:RewriteContext, node:Node) -> Loop:
   indices = [Var(0, "_idx") for _ in range(len(node.shape))]
   shape = node.shape
   node = Index(node, indices)
   for idx,dim in zip(indices, shape):
     node = Loop(idx, dim, node)
+  node = recurse_rewrite_graph(node, loop_rewrite, ctx)
   return node
 def propagate_index(idx: Index) -> Node:
   sources = map(lambda x: x if x.shape == () else idx.copy((x, idx.indexer)), idx.data.sources)
@@ -124,11 +136,24 @@ base_rewrite = PatternMatcher([
   # Refactor print statements to use malloc/free
   (Pat(Print, predicate=lambda x: x.data.shape != (), name="x"), refactor_print),
   # Propagate indexing down the graph
-  (Pat(Index, name="idx", sources=(Pat(Reshape, name="dim_node")), fuzzy_source_match=True), rewrite_index),
-  (Pat(Index, name="idx", sources=(Pat((BinaryOp, Store))), fuzzy_source_match=True), propagate_index),
-  (Pat(Index, name="idx1", sources=(Pat(Index, name="idx2")), fuzzy_source_match=True), lambda idx1,idx2: Index(idx2.data, idx1.indices + idx2.indices)),
+  # (Pat(Index, name="idx", sources=(Pat(Reshape, name="dim_node")), fuzzy_source_match=True), rewrite_index),
+  # (Pat(Index, name="idx", sources=(Pat((BinaryOp, Store))), fuzzy_source_match=True), propagate_index),
+  # (Pat(Index, name="idx1", sources=(Pat(Index, name="idx2")), fuzzy_source_match=True), lambda idx1,idx2: Index(idx2.data, idx1.indices + idx2.indices)),
   # Move array to assignments
-  (Pat((Index, BinaryOp, Expand, Reshape), name="parent"), assign_array),
+  (Pat(Index, name="x"), lambda ctx, x: recurse_rewrite_graph(x, index_rewrite, ctx)), # TODO make tracking work
+  (Pat((BinaryOp, Expand, Reshape), name="parent"), assign_array),
+])
+
+loop_rewrite = PatternMatcher([
+  # (Pat(Loop, name="x"), lambda ctx, x: ctx.add(x)),
+  (Pat(Index, name="x"), lambda ctx, x: recurse_rewrite_graph(x, index_rewrite, ctx)), # TODO make tracking work
+]) 
+# TODO make rewritecontext and global loop rewrite compatible
+index_rewrite = PatternMatcher([
+    (Pat(Index, name="idx", sources=(Pat((BinaryOp, Store))), fuzzy_source_match=True), propagate_index),
+    (Pat(Index, name="idx1", sources=(Pat(Index, name="idx2")), fuzzy_source_match=True),
+     lambda idx1, idx2: idx1.copy((idx2.data, idx1.indexer + idx2.indexer))),
+    (Pat(Index, name="parent"), assign_array),
 ])
 
 symbolic = PatternMatcher([
@@ -152,43 +177,46 @@ symbolic = PatternMatcher([
   (Pat.var("y") * Pat.var("x") / Pat.var("x"), lambda y, x: y), # (y*x)/x -> y
 ])
 
-def rewrite_ast(ast:Node, rewriter:PatternMatcher, ctx=None) -> Node:
-  def rewrite_graph(n:Node, rewriter:PatternMatcher, ctx, tracker:list, position:tuple[int], replace:dict[Node, Node]=None) -> Node:
-    if replace is None: replace = {}
-    elif (rn := replace.get(n)) is not None:
-      return rn
-    new_n:Node = n; last_n:Node = None
-    while new_n is not None:
-      last_n, new_n = new_n, rewriter.rewrite(new_n, ctx, tracker)
-      if tracker is not None and new_n is not None: tracker[-1] = tracker[-1] + (position,)
-    new_src = tuple(rewrite_graph(node, rewriter, ctx, tracker, position + (i,), replace) for i,node in enumerate(last_n.sources))
-    replace[n] = ret = last_n if new_src == last_n.sources else rewrite_graph(last_n.copy(new_src), rewriter, ctx, tracker, position, replace)
-    return ret
-  
+def recurse_rewrite_graph(n:Node, rewriter:PatternMatcher, ctx:RewriteContext, position:tuple[int]=None, replace:dict[Node, Node]=None) -> Node:
+  if replace is None: replace = {}
+  elif (rn := replace.get(n)) is not None:
+    return rn
+  if position is None: position = ctx.position
+  else: ctx.position = position
+  new_n:Node = n; last_n:Node = None
+  while new_n is not None:
+    if ctx.tracker is not None: tracker_step = len(ctx.tracker)
+    last_n, new_n, pattern = new_n, *rewriter.rewrite(new_n, ctx)
+    if new_n == last_n: break
+    if ctx.tracker is not None and new_n is not None:
+      ctx.tracker.track_step(pattern, new_n, position, tracker_step)
+  new_src = tuple(recurse_rewrite_graph(node, rewriter, ctx, position + (i,), replace) for i,node in enumerate(last_n.sources))
+  replace[n] = ret = last_n if new_src == last_n.sources else recurse_rewrite_graph(last_n.copy(new_src), rewriter, ctx, position, replace)
+  return ret
+
+def rewrite_ast(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None) -> Node:  
   @functools.cache
-  def _get_graph(tracker:tuple, root:Node, i:int) -> Node:
+  def _get_graph(tracker:TrackedRewrite, root:Node, i:int) -> Node:
     if i <= -1: return root
     node = _get_graph(tracker, root, i-1)
     node_stack = [node]
-    for pos in tracker[i][3][:-1]:
+    for pos in tracker.get_position(i)[:-1]:
       node = node.sources[pos]
       node_stack.append(node)
-    new_graph = tracker[i][2]
-    for pos,n in zip(tracker[i][3][::-1], node_stack[::-1]):
+    new_graph = tracker.get_rewritten(i)
+    for pos,n in zip(tracker.get_position(i)[::-1], node_stack[::-1]):
       new_graph = n.copy(n.sources[:pos] + (new_graph,) + n.sources[pos+1:])
     return new_graph
   @functools.cache
-  def _get_history_entry(tracker:tuple, root:Node, i:int) -> str:
+  def _get_history_entry(tracker:TrackedRewrite, root:Node, i:int) -> str:
     def format(node:Node, previous:set[Node]) -> str:
-      return node.__repr__() if node in previous else f"\x1b[1m{node.__repr__()}\x1b[0m"
-    pattern = f"{tracker[i][0]}\n" if i >= 0 else ""
+      return node.__repr__() if node in previous else f"\x1b[1m{node}\x1b[0m"
+    pattern = f"{tracker.get_pattern(i)}\n" if i >= 0 else ""
     return f"{pattern}{_get_graph(tracker, root, i).get_print_tree(set(), [], lambda x: format(x, linearize(_get_graph(tracker, root, i-1))))}"
 
-  tracker:list[tuple[Pat, Node, Node, tuple[int]]] = [] if TRACK_REWRITES else None
-  rewrite = rewrite_graph(ast, rewriter, ctx, tracker, ())
-  if TRACK_REWRITES:
-    tracker = tuple(tracker)
-    navigate_history(lambda i: _get_history_entry(tracker, ast, i-1), len(tracker) + 1)
+  rewrite = recurse_rewrite_graph(graph, rewriter, ctx)
+  print(ctx.tracker._tracker)
+  if TRACK_REWRITES: navigate_history(lambda i: _get_history_entry(ctx.tracker, graph, i-1), len(ctx.tracker) + 1)
   return rewrite
 
 def linearize(ast:Node) -> tuple[Node]:
@@ -212,7 +240,7 @@ def parse_ast(ast:list[Node]|Node) -> tuple[Node]:
 
   ast = rewrite_ast(ast, base_rewrite, (context:=RewriteContext()))
   ast = Program(tuple(context.pre.values()) + ast.sources + tuple(context.post.values()))
-  ast = rewrite_ast(ast, symbolic)
+  # ast = rewrite_ast(ast, symbolic)
   if DEBUG >= 2:
     print("LOWERED GRAPH")
     ast.print_tree()
