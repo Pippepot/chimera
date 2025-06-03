@@ -61,7 +61,6 @@ def navigate_history(get_history_entry, total_entries):
 
   while True:
     key = _get_key()
-
     if key in (b'\xe0', b'\x00', '\x1b'):
       key = _get_key()
       if key in (b'H', '[A'):

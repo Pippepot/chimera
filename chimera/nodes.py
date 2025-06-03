@@ -13,6 +13,7 @@ class NodeMetaClass(type):
     node._arg = getattr(node, "_arg", None)
     node._dtype = getattr(node, "_dtype", dtypes.void)
     node._view = getattr(node, "_view", View.create())
+    node._shape = getattr(node, "_shape", ())
     return NodeMetaClass.register(node)
   @classmethod
   def register(cls, node:Node) -> Node:
@@ -30,6 +31,7 @@ class Node(metaclass=NodeMetaClass):
   _arg:any
   _dtype:DType
   _view:View
+  _shape:tuple[int]
   @property
   def sources(self) -> tuple[Node]: return self._sources
   @property
@@ -37,16 +39,17 @@ class Node(metaclass=NodeMetaClass):
   @property
   def view(self) -> View: return self._view
   @property
-  def shape(self) -> tuple[int, ...]: return self._view.shape
+  def shape(self) -> tuple[int, ...]: return self._shape
 
-  def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, view:View=None) -> Node:
+  def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, view:View=None, shape:tuple[int]=None) -> Node:
     new_node:Node = self.__class__.__new__(self.__class__)
     new_node._sources = tupled(sources) if sources is not None else self._sources
     new_node._arg = arg if arg is not None else self._arg
     new_node._dtype = dtype if dtype is not None else self._dtype
     new_node._view = view if view is not None else self._view
+    new_node._shape = shape if shape is not None else self._shape
     new_node = NodeMetaClass.register(new_node)
-    assert not self.sources or len(self.sources) == len(new_node.sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(new_node.sources)}"
+    assert not self.sources or len(self.sources) == len(new_node.sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(new_node.sources)}.\nOriginal node: {self}"
     return new_node
 
   def print_tree(self, visited:set[Node]=None, var_count:list[Node]=None): print(self.get_print_tree(visited, var_count))
@@ -86,22 +89,30 @@ class Program(Node):
 
 class Const(Node):
   def __init__(self, value):
-    assert isinstance(value, (int, float)), f"Const node can only have values of type int, float. Type was {type(value)}"
+    assert isinstance(value, (int, float)), f"Const node can only have values of type int, float. Type was {type(value)}. {value}"
     self._arg = value
     self._dtype = dtypes.python_to_dtype[type(self.value)]
+    self._shape = ()
   @property
   def value(self): return self._arg
+  @property
+  def strides(self): return 0
   def __repr__(self): return f"Const {self.value}"
 
 class Var(Node):
-  def __init__(self, data:Node, name:str="var"):
+  def __init__(self, data:Allocate|Array|Const, name:str="var"):
     assert data != None, "data should not be none"
-    self._sources = (Node.to_node(data),)
+    data = Node.to_node(data)
+    assert isinstance(data, (Allocate, Array, Const)), f"data is not valid type. {data}"
+    self._sources = (data,)
     self._view = self.data.view
+    self._shape = self.data._shape
     self._dtype = self.data.dtype
-    self._arg = name
+    self._arg = (name, data.strides)
   @property
-  def name(self) -> str: return self._arg
+  def name(self) -> str: return self._arg[0]
+  @property
+  def strides(self) -> Node: return self._arg[1]
   @property
   def data(self) -> Node: return self.sources[0]
   def __repr__(self): return self.name
@@ -113,12 +124,15 @@ class Assign(Node):
   def var(self) -> Var: return self.sources[0]
 
 class Allocate(Node):
-  def __init__(self, data:Node):
-    self._arg = data.dtype.itemsize * prod(data.shape)
+  def __init__(self, data:Array):
+    self._arg = (data.dtype.itemsize * prod(data.shape), data.strides)
     self._dtype = data.dtype
     self._view = data.view
+    self._shape = data.shape
   @property
-  def size(self) -> int: return self._arg
+  def size(self) -> int: return self._arg[0]
+  @property
+  def strides(self) -> int: return self._arg[1]
 
 class Free(Node):
   def __init__(self, var:Var):
@@ -130,6 +144,7 @@ class Store(Node):
   def __init__(self, data:Node, value:Node):
     self._sources = (data, value)
     self._view = data.view
+    self._shape = data.shape
     self._dtype = data.dtype
   @property
   def data(self) -> Node: return self.sources[0]
@@ -139,23 +154,41 @@ class Store(Node):
 class Array(Node):
   def __init__(self, data:list):
     self._view = View.create(get_shape(data))
-    self._arg = tuple(fully_flatten(data))
+    self._shape = get_shape(data)
+    self._arg = (tuple(fully_flatten(data)), self._view.strides)
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
     self._dtype = dtypes.python_to_dtype[type(self.data[0])]
   @property
-  def data(self) -> tuple: return self._arg
+  def data(self) -> tuple: return self._arg[0]
+  @property
+  def strides(self) -> int: return self._arg[1]
 
 class Index(Node):
-  def __init__(self, data:Node, indices:int|Var|list[int|Var]):
+  def __init__(self, data:Node, indices:int|Const|list[int|Const]):
+    assert isinstance(indices, (int, list, tuple)) or (isinstance(indices, Const|Var) and indices.dtype is dtypes.int32), f"Expected indices to be int, Const, Var or list thereof but got {indices}"
     indices = tuple(map(Node.to_node, listed(indices)))
     assert data.shape != (), f"Cannot index node with no shape {data}"
     assert len(indices) > 0, f"Cannot index {data} with no indices"
-    indexer = indices[0] * data.view.strides[0]
-    for i,idx in enumerate(indices[1:], 1):
-      indexer = indexer + idx * data.view.strides[i]
-    self._sources = (data, indexer)
-    self._view = View.create(self.data.shape[len(indices):])
+    strides = data.view.strides[:len(data.shape) - len(indices)]
+    # indexer = Const(0)
+    # for i, stride in enumerate(strides):
+    #   indexer = indexer + indices[i] * stride
+    self._sources = (data, *indices)
+    self._view = View.create(self.data.shape[len(indices):], strides)
+    self._shape = data.shape
     self._dtype = self.data.dtype
+  @property
+  def data(self) -> Node: return self.sources[0]
+  @property
+  def indices(self) -> Node: return self.sources[1:]
+
+class Load(Node):
+  def __init__(self, data:Node, indices:int|Const|list[int|Const]):
+    assert len(data.strides) == len(indices), f"Indices has to match data shape. Indices: {indices}. Strides: {data.strides}"
+    indexer = Const(0)
+    for i, stride in enumerate(data.strides):
+      indexer = indexer + indices[i] * stride
+    self._sources = (data, indexer)
   @property
   def data(self) -> Node: return self.sources[0]
   @property
@@ -165,7 +198,8 @@ class Loop(Node):
   def __init__(self, start:Var|Const, stop:Const, scope:Node):
     if not isinstance(start, Var): start = Var(Node.to_node(start), "idx")
     self._sources = (Assign(start), Node.to_node(stop), scope)
-    self._view = self.scope.view
+    self._view = scope.view
+    self._shape = scope.shape
     assert isinstance(self.stop, Const), f"Loop stop must be a constant but got {type(self.stop)}"
   @property
   def assign(self) -> Assign: return self.sources[0]
@@ -185,8 +219,8 @@ class BinaryOp(Node):
     for s in self.sources:
       if isinstance(s, Expand): print(f"Expanding {s.node.view} to {s.view}")
     self._view = self.left.view if len(self.left.shape) >= len(self.right.shape) else self.right.view
+    self._shape = self.left.shape if len(self.left.shape) >= len(self.right.shape) else self.right.shape
     self._dtype = self.left.dtype # TODO resolve better
-
   @property
   def op(self): return self._arg
   @property
@@ -218,6 +252,7 @@ class Expand(Node):
     #TODO: assert that the view is compatible with the node
     self._sources = (node,)
     self._view = view
+    self._shape = view.shape
     self._dtype = self.node.dtype
   @property
   def node(self) -> Node: return self.sources[0]    
@@ -227,12 +262,16 @@ class Reshape(Node):
     assert prod(node.shape) == prod(shape), f"Cannot reshape {node.shape} to {shape} as they differ in size ({prod(node.shape)}, {prod(shape)})"
     self._sources = (node,)
     self._view = View.create(shape) # TODO: take previous view into account
+    self._shape = shape
     self._dtype = self.node.dtype
   @property
   def node(self) -> Node: return self.sources[0]
 
-class Print(Node):
+class Debug(Node):
   def __init__(self, data:Node):
     self._sources = (data,)
+    self._view = data.view
+    self._shape = data.shape
+    self._dtype = data.dtype
   @property
   def data(self): return self.sources[0]

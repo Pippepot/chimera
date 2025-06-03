@@ -1,53 +1,65 @@
-<div align="center">
-  <h1>
-    CHIMERA
-  </h1>
-</div>
-The Chimera language may not be all that useful, but it is definitely interesting.
+chimera is programming language for accelerated computing
+with this goal in mind, a few restrictions are in order:
 
-Syntax is flexible and mostly too wild.
+- No unbounded loops or recursion.
+  This restriction makes the language non-turing complete and thus restricts the expressiveness of the language.
+  chimera is supposed to be used in tandem with another programming language in order to achieve expressiveness.
+  With this restriction a few optimizations can be achieved
+  - Programs are guaranteed to finish
+    With turing completenes gone, the halting problem is also gone
+  - Compute budget estimation
+    The compute of a program can be estimated as a range. It cannot be estimated exactly because of conditionals.
+- Functional paradigm
+  This may seem to contradict the notion of accelerated computing and it may also in fact do that.
+  I like functional paradigm so I will try to make it work
+  Also functions can be parallelized as they are pure, which may be harder to infer from loops
+  I want implicit parallelization as default and allow customization if needed
 
-# Features
-In Chimera, the only way to produce output is through the ```print``` definition:
+---
+As noted earlier, chimera is supposed to be used in tandem with another programming language and rarely on its own.
+Therefore the language as no print or input functions. chimera takes input arguments when it is called and outputs a value when it completes.
+There is no outside influnce on the program while it is running.
 
-`
-print 1 + 2
-`
+chimera programs are run top to bottom
 
-# Questionable Features
-You can create definitions using the `define` keyword. Definitions are similar to functions but have more flexible syntax.
+Example chimera program
+```
+a = 3
+b = 5
+a + b
+```
+The program will return 8 and exit
 
-Here’s one way to define `add`:
-```
-define add(a:int, b:int) -> int
-  return a + b
+Though chimera does not have a print function, it does have `dbg`, which will print to stdout and can be used during development.
 
-print add(1, 2)
+In chimera scalars and arrays can be expressed interchangably
+Take the following function:
 ```
-However, parentheses are optional, and so is the comma:
+def step_simulation(x, v, a, dt)
+  v += a * dt
+  x += v * dt
+  x, v
 ```
-define add a:int b:int -> int
-  return a + b
+The function can either be called with scalars or arrays
+```
+step_simulation(0, 10, -9.81, 0.02)
+step_simulation([1, 2, 3], [10, 20, 30], [0, -9.81, 0], 0.02)
+```
 
-print add 1 2
-```
-Furthermore, the definition doesn’t have to start with a name, and the name can be almost anything — even no name at all (but don’t do that):
-```
-define a:int $ b:int -> int
-  return a + b
+Most operations on arrays are elementwise and arrays of different shapes will attempt to broadcast
 
-print 1 $ 2
-```
-# Bad Features
-Chimera follows standard operator precedence:
-```
-print 1 + 2 * 3
-=> 7
-```
-But it doesn’t have to:
-```
-precedence * = -1
-
-print 1 + 2 * 3
-=> 9
-```
+List of compilation steps
+- Tokenize
+- Parse
+  - Syntax validation
+- Rewrite
+  - Structural rewrite
+  - Index lowering
+  - Symbolic
+- Validation
+  - Type checking
+  - Shape checking
+  - Semantic analysis
+- Linearize
+- Render
+- Compile

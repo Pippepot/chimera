@@ -14,7 +14,7 @@ op_rendering: dict = {
 
 class NodeGroup:
   Associative = {'+', '*'}
-  Terminal = {Print, Loop}
+  Terminal = {Debug, Loop}
 
 class TypeGroup:
   Number = {dtypes.int32, dtypes.float32}
@@ -45,10 +45,10 @@ render_patterns = PatternMatcher([
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]});"),
   (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n {append_indent(ctx[x.scope])}\n}}"),
   (Pat((Expand, Reshape), name='x'), lambda ctx, x: ctx[x.node]),
-  (Pat(Index, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),
+  (Pat(Load, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),
   # (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.func]}({', '.join(ctx[arg] for arg in x.args)})"),
-  (Pat(Print, sources=Pat(Node, predicate=lambda x: x.shape == (), name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
-  (Pat(Print, sources=Pat(Node, name='x')), lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, {x.view.size}, (int[]){render_array(x.shape)}, {len(x.shape)}, (int[]){render_array(x.view.strides)}, "%{x.dtype.fmt}", {x.dtype.fmt}_fmt));'),
+  (Pat(Debug, sources=Pat(Node, predicate=lambda x: x.shape == (), name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
+  (Pat(Debug, sources=Pat(Node, name='x')), lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, {x.view.size}, (int[]){render_array(x.shape)}, {len(x.shape)}, (int[]){render_array(x.view.strides)}, "%{x.dtype.fmt}", {x.dtype.fmt}_fmt));'),
   (Pat(BinaryOp, name='x'), lambda ctx, x: op_rendering[x.op](
     *[strip_parens(ctx[source]) if isinstance(source, BinaryOp) and source.op == x.op and x.op in NodeGroup.Associative else ctx[source] for source in x.sources]
   )),

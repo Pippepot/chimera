@@ -19,15 +19,15 @@ Debugging
   Track rewrites
 """
 
-DEBUG.value = 0
-TRACK_REWRITES.value = 1
+DEBUG.value = 2
+TRACK_REWRITES.value = 0
 
 def main():
   ast = [
     # Print(Reshape(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]), (1,3,1,2)) + 3),
     # Print(Array([[1,2,3],[4,5,6]]) * Array([5,2,10])),
-    Print(Expand(Array([5,2,10]), View.create((2,3)))),
-    # Print(Index(Array([[1,2,3],[4,5,6]]), 0)),
+    # Debug(Expand(Array([5,2,10]), View.create((2,3)))),
+    Debug(Array([[1,2,3],[4,5,6]])),
   ]
   if DEBUG:
     compile_timer = time.perf_counter()

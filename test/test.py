@@ -11,15 +11,15 @@ DEBUG.value = 0
 
 class Test(unittest.TestCase): 
   def test_print_array(self):
-    ast = Print(Array([1, 2]))
+    ast = Debug(Array([1, 2]))
     self.assertEqual(self.parse(ast), '[1, 2]\n')
 
   def test_print_multi_array(self):
-    ast = Print(Array([[1, 2],[3, 4]]))
+    ast = Debug(Array([[1, 2],[3, 4]]))
     self.assertEqual(self.parse(ast), '[[1, 2], [3, 4]]\n')
 
   def test_add_array(self):
-    ast = Print(
+    ast = Debug(
       BinaryOp(
         op='+',
         left=Array([1, 2]),
@@ -28,7 +28,7 @@ class Test(unittest.TestCase):
     self.assertEqual(self.parse(ast), '[4, 5]\n')
 
   def test_index_propagation(self):
-    ast = Print(
+    ast = Debug(
       Index(
         BinaryOp(
           op='+',
