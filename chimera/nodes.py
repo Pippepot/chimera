@@ -1,7 +1,7 @@
 from __future__ import annotations
 from chimera.dtype import DType, dtypes
 from chimera.helpers import fully_flatten, get_shape, all_same, listed, tupled, prod
-from chimera.view import View
+from chimera.view import View, strides_for_shape # TODO don't
 from dataclasses import dataclass
 import weakref
 
@@ -95,8 +95,6 @@ class Const(Node):
     self._shape = ()
   @property
   def value(self): return self._arg
-  @property
-  def strides(self): return 0
   def __repr__(self): return f"Const {self.value}"
 
 class Var(Node):
@@ -108,7 +106,7 @@ class Var(Node):
     self._view = self.data.view
     self._shape = self.data._shape
     self._dtype = self.data.dtype
-    self._arg = (name, data.strides)
+    self._arg = (name, data.strides if isinstance(data, Array) else strides_for_shape(data.shape))
   @property
   def name(self) -> str: return self._arg[0]
   @property
@@ -124,15 +122,13 @@ class Assign(Node):
   def var(self) -> Var: return self.sources[0]
 
 class Allocate(Node):
-  def __init__(self, data:Array):
-    self._arg = (data.dtype.itemsize * prod(data.shape), data.strides)
-    self._dtype = data.dtype
-    self._view = data.view
-    self._shape = data.shape
+  def __init__(self, shape:tuple[int], dtype:DType):
+    self._arg = dtype.itemsize * prod(shape)
+    self._dtype = dtype
+    # self._view = data.view
+    self._shape = shape
   @property
-  def size(self) -> int: return self._arg[0]
-  @property
-  def strides(self) -> int: return self._arg[1]
+  def size(self) -> int: return self._arg
 
 class Free(Node):
   def __init__(self, var:Var):
@@ -170,9 +166,6 @@ class Index(Node):
     assert data.shape != (), f"Cannot index node with no shape {data}"
     assert len(indices) > 0, f"Cannot index {data} with no indices"
     strides = data.view.strides[:len(data.shape) - len(indices)]
-    # indexer = Const(0)
-    # for i, stride in enumerate(strides):
-    #   indexer = indexer + indices[i] * stride
     self._sources = (data, *indices)
     self._view = View.create(self.data.shape[len(indices):], strides)
     self._shape = data.shape
@@ -183,11 +176,12 @@ class Index(Node):
   def indices(self) -> Node: return self.sources[1:]
 
 class Load(Node):
-  def __init__(self, data:Node, indices:int|Const|list[int|Const]):
-    assert len(data.strides) == len(indices), f"Indices has to match data shape. Indices: {indices}. Strides: {data.strides}"
+  def __init__(self, data:Var, indices:int|Const|list[int|Const]):
+    assert isinstance(data, Var), "Only variables can be loaded"
+    assert len(data.strides) == len(indices), f"Indices has to match data shape.\nIndices: {indices}\nStrides: {data.strides}\nNode: {data}"
     indexer = Const(0)
-    for i, stride in enumerate(data.strides):
-      indexer = indexer + indices[i] * stride
+    for idx, stride in zip(reversed(indices), data.strides):
+      indexer = indexer + idx * stride
     self._sources = (data, indexer)
   @property
   def data(self) -> Node: return self.sources[0]

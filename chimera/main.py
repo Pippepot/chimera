@@ -19,7 +19,7 @@ Debugging
   Track rewrites
 """
 
-DEBUG.value = 2
+DEBUG.value = 0
 TRACK_REWRITES.value = 0
 
 def main():
@@ -27,7 +27,7 @@ def main():
     # Print(Reshape(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]), (1,3,1,2)) + 3),
     # Print(Array([[1,2,3],[4,5,6]]) * Array([5,2,10])),
     # Debug(Expand(Array([5,2,10]), View.create((2,3)))),
-    Debug(Array([[1,2,3],[4,5,6]])),
+    Debug(Array([[1,2,3],[4,5,6]])+Array([[1,2,3],[4,5,6]])),
   ]
   if DEBUG:
     compile_timer = time.perf_counter()

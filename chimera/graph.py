@@ -99,7 +99,7 @@ class TrackedRewrite:
   def __len__(self): return len(self._tracker)
 
 def refactor_print(ctx:RewriteContext, x:Debug) -> Var:
-  var = Var(Allocate(x.data), "var_print")
+  var = Var(Allocate(x.data.shape, x.data.dtype), "var_print")
   ctx.pre[x] = Assign(var)
   ctx.post[x] = Debug(var)
   ctx.post[x.data] = Free(var)
@@ -117,7 +117,7 @@ def create_loop(ctx:RewriteContext, node:Node) -> Loop:
   indices = [Var(0, "var_idx") for _ in range(len(node.shape))]
   shape = node.shape
   node = Index(node, indices)
-  for idx,dim in zip(indices, shape):
+  for idx,dim in zip(indices, reversed(shape)):
     node = Loop(idx, dim, node)
   return node
 def propagate_index(idx: Index) -> Node:
