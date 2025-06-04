@@ -47,8 +47,8 @@ render_patterns = PatternMatcher([
   (Pat((Expand, Reshape), name='x'), lambda ctx, x: ctx[x.node]),
   (Pat(Load, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),
   # (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.func]}({', '.join(ctx[arg] for arg in x.args)})"),
-  (Pat(Debug, sources=Pat(Node, predicate=lambda x: x.shape == (), name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
   (Pat(Debug, sources=Pat(Var, name='x')), lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, {prod(x.shape)}, (int[]){render_array(x.shape)}, {len(x.shape)}, (int[]){render_array(x.strides)}, "%{x.dtype.fmt}", {x.dtype.fmt}_fmt));'),
+  (Pat(Debug, sources=Pat(Node, name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
   (Pat(BinaryOp, name='x'), lambda ctx, x: op_rendering[x.op](
     *[strip_parens(ctx[source]) if isinstance(source, BinaryOp) and source.op == x.op and x.op in NodeGroup.Associative else ctx[source] for source in x.sources]
   )),

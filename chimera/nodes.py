@@ -168,7 +168,7 @@ class Index(Node):
     strides = data.view.strides[:len(data.shape) - len(indices)]
     self._sources = (data, *indices)
     self._view = View.create(self.data.shape[len(indices):], strides)
-    self._shape = data.shape
+    self._shape = self.data.shape[len(indices):]
     self._dtype = self.data.dtype
   @property
   def data(self) -> Node: return self.sources[0]
@@ -209,7 +209,7 @@ class BinaryOp(Node):
     self._sources = (left, right)
     self._arg = op
     views = [self.left.view, self.right.view]
-    self._sources = tuple(s if s.view == v else Expand(s, v) for s,v in zip(self.sources, self._broadcast_views(views)))
+    self._sources = tuple(s if s.view == v else Expand(s, v.shape) for s,v in zip(self.sources, self._broadcast_views(views)))
     for s in self.sources:
       if isinstance(s, Expand): print(f"Expanding {s.node.view} to {s.view}")
     self._view = self.left.view if len(self.left.shape) >= len(self.right.shape) else self.right.view
@@ -242,11 +242,12 @@ class BinaryOp(Node):
   def __repr__(self): return f"{super().__repr__()} {self.op}"
 
 class Expand(Node):
-  def __init__(self, node:Node, view:View):
-    #TODO: assert that the view is compatible with the node
+  def __init__(self, node:Node, shape:tuple[int, ...]):
+    assert len(node.shape) <= len(shape), f"Expand has to have same or more dimensions as the source node\nSource shape: {node.shape}\nExpand shape: {shape}"
+    assert all(s1 == 1 or s1 == s2 for s1, s2 in zip(node.shape, shape[len(shape) - len(node.shape):])),\
+    f"Expanded shape is invalid for source shape\nSource shape: {' '*(len(str(shape))-len(str(node.shape)))}{node.shape}\nExpand shape: {shape}"
     self._sources = (node,)
-    self._view = view
-    self._shape = view.shape
+    self._shape = shape
     self._dtype = self.node.dtype
   @property
   def node(self) -> Node: return self.sources[0]    

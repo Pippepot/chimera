@@ -123,7 +123,9 @@ def create_loop(ctx:RewriteContext, node:Node) -> Loop:
 def propagate_index(idx: Index) -> Node:
   sources = map(lambda x: x if x.shape == () else Index(x, idx.indices), idx.data.sources)
   return idx.data.copy(sources, idx.data._arg, idx.data.dtype, idx.view)
-def rewrite_index(idx:Index, dim_node:Reshape|Expand) -> Index:
+def shrink(idx:Index, expand:Expand) -> Index:
+  return Index(expand.node, tuple(0 if n == 1 or 0 else i for n, i in zip(expand.node.shape, idx.indices)))
+def rewrite_index(idx:Index, dim_node:Reshape) -> Index:
   new_indices = []
   remaining = idx.indices
   for stride in dim_node.node.view.strides:
@@ -142,7 +144,8 @@ index_collapse_rewrite = PatternMatcher([
     # Propagate indexing down the graph
     (Pat(Index, name="idx", sources=Pat((BinaryOp, Store)), fuzzy_source_match=True), propagate_index),
     (Pat(Index, name="idx1", sources=Pat(Index, name="idx2"), fuzzy_source_match=True),
-     lambda idx1, idx2: Index(idx2.data, idx1.indices + idx2.indices)),
+     lambda idx1, idx2: Index(idx2.data, idx2.indices + idx1.indices[len(idx2.shape):])),
+    (Pat(Index, name="idx", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), shrink),
     (Pat(Index, name="idx", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda idx, var: Load(var, idx.indices)),
 ])
 
