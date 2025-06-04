@@ -19,13 +19,16 @@ class Test(unittest.TestCase):
     self.assertEqual(self.parse(ast), '[[1, 2], [3, 4]]\n')
 
   def test_add_array(self):
-    ast = Debug(
-      BinaryOp(
-        op='+',
-        left=Array([1, 2]),
-        right=Const(3))
-      )
+    ast = Debug(BinaryOp('+', Array([1, 2]), Const(3)))
     self.assertEqual(self.parse(ast), '[4, 5]\n')
+
+  def test_broadcast(self):
+    ast = Debug(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]))
+    self.assertEqual(self.parse(ast), '[[5, 4, 30], [20, 10, 60]]\n')
+
+  def test_reshape(self):
+    ast = Debug(Reshape(Array([[1,2,3], [4,5,6]]), (1, 3, 2)))
+    self.assertEqual(self.parse(ast), '[[[1, 2], [3, 4], [5, 6]]]\n')
 
   def test_index_propagation(self):
     ast = Debug(

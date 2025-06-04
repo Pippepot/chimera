@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Callable, TypeVar
-from chimera.helpers import DEBUG, TRACK_REWRITES, navigate_history
+from chimera.helpers import DEBUG, TRACK_REWRITES, navigate_history, canonicalize_strides
 from chimera.nodes import *
 import inspect, functools
 
@@ -98,8 +98,8 @@ class TrackedRewrite:
     self._tracker.insert(len(self) if step is None else step, (pattern, rewritten, position))
   def __len__(self): return len(self._tracker)
 
-def refactor_print(ctx:RewriteContext, x:Debug) -> Var:
-  var = Var(Allocate(x.data.shape, x.data.dtype), "var_print")
+def refactor_debug(ctx:RewriteContext, x:Debug) -> Var:
+  var = Var(Allocate(x.data.shape, x.data.dtype), "dbg")
   ctx.pre[x] = Assign(var)
   ctx.post[x] = Debug(var)
   ctx.post[x.data] = Free(var)
@@ -109,12 +109,13 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   for i,arr in enumerate(sources): 
     if not isinstance(arr, Array): continue
     if arr not in ctx.pre:
-      var = Var(arr, "var_arr")
+      var = Var(arr, "arr")
       ctx.pre[arr] = Assign(var)
     sources[i] = ctx.pre[arr].var
   return None if sources == list(parent.sources) else parent.copy(sources)
 def create_loop(ctx:RewriteContext, node:Node) -> Loop:
-  indices = [Var(0, "var_idx") for _ in range(len(node.shape))]
+  print(node.shape)
+  indices = [Var(0, "idx") for _ in range(len(node.shape))]
   shape = node.shape
   node = Index(node, indices)
   for idx,dim in zip(indices, reversed(shape)):
@@ -124,18 +125,19 @@ def propagate_index(idx: Index) -> Node:
   sources = map(lambda x: x if x.shape == () else Index(x, idx.indices), idx.data.sources)
   return idx.data.copy(sources, idx.data._arg, idx.data.dtype, idx.view)
 def shrink(idx:Index, expand:Expand) -> Index:
-  return Index(expand.node, tuple(0 if n == 1 or 0 else i for n, i in zip(expand.node.shape, idx.indices)))
-def rewrite_index(idx:Index, dim_node:Reshape) -> Index:
+  return Index(expand.node, canonicalize_strides(expand.node.shape, idx.indices))
+def lower_index_reshape(idx:Index, reshape:Reshape) -> Index:
+  offset = Const(0)
+  for i, stride in zip(idx.indices[::-1], strides_for_shape(reshape.shape)): offset += i * stride
   new_indices = []
-  remaining = idx.indices
-  for stride in dim_node.node.view.strides:
-    new_indices.append(remaining / stride)
-    remaining = remaining % stride  
-  return Index(dim_node.node, new_indices)
+  for s in reversed(reshape.node.shape):
+    new_indices.append(offset % s)
+    offset = offset / s
+  return Index(reshape.node, tuple(new_indices))
 
 base_rewrite = PatternMatcher([
   # Refactor print statements to use malloc/free
-  (Pat(Debug, predicate=lambda x: x.data.shape != (), name="x"), refactor_print),
+  (Pat(Debug, predicate=lambda x: x.data.shape != (), name="x"), refactor_debug),
   # Move array to assignments
   (Pat((BinaryOp, Expand, Reshape, Store, Index), name="parent"), assign_array),
 ])
@@ -146,6 +148,7 @@ index_collapse_rewrite = PatternMatcher([
     (Pat(Index, name="idx1", sources=Pat(Index, name="idx2"), fuzzy_source_match=True),
      lambda idx1, idx2: Index(idx2.data, idx2.indices + idx1.indices[len(idx2.shape):])),
     (Pat(Index, name="idx", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), shrink),
+    (Pat(Index, name="idx", sources=Pat(Reshape, name="reshape"), fuzzy_source_match=True), lower_index_reshape),
     (Pat(Index, name="idx", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda idx, var: Load(var, idx.indices)),
 ])
 

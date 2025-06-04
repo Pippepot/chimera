@@ -1,7 +1,7 @@
 from __future__ import annotations
 from chimera.dtype import DType, dtypes
-from chimera.helpers import fully_flatten, get_shape, all_same, listed, tupled, prod
-from chimera.view import View, strides_for_shape # TODO don't
+from chimera.helpers import fully_flatten, get_shape, all_same, listed, tupled, prod, strides_for_shape
+from chimera.view import View
 from dataclasses import dataclass
 import weakref
 
@@ -17,7 +17,7 @@ class NodeMetaClass(type):
     return NodeMetaClass.register(node)
   @classmethod
   def register(cls, node:Node) -> Node:
-    key = (type(node), node._sources, node._arg, node._dtype)
+    key = (type(node), node._sources, node._arg, node._dtype, node._shape)
     if not isinstance(node, Var) \
        and (wret := NodeMetaClass.node_cache.get(key, None)) is not None \
        and (ret := wret()) is not None:
@@ -210,8 +210,6 @@ class BinaryOp(Node):
     self._arg = op
     views = [self.left.view, self.right.view]
     self._sources = tuple(s if s.view == v else Expand(s, v.shape) for s,v in zip(self.sources, self._broadcast_views(views)))
-    for s in self.sources:
-      if isinstance(s, Expand): print(f"Expanding {s.node.view} to {s.view}")
     self._view = self.left.view if len(self.left.shape) >= len(self.right.shape) else self.right.view
     self._shape = self.left.shape if len(self.left.shape) >= len(self.right.shape) else self.right.shape
     self._dtype = self.left.dtype # TODO resolve better
@@ -256,7 +254,7 @@ class Reshape(Node):
   def __init__(self, node:Node, shape:tuple[int, ...]):
     assert prod(node.shape) == prod(shape), f"Cannot reshape {node.shape} to {shape} as they differ in size ({prod(node.shape)}, {prod(shape)})"
     self._sources = (node,)
-    self._view = View.create(shape) # TODO: take previous view into account
+    # self._view = View.create(shape) # TODO: take previous view into account
     self._shape = shape
     self._dtype = self.node.dtype
   @property

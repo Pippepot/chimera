@@ -1,6 +1,6 @@
 from typing import TypeVar, Iterable
 import sys, os
-import functools, operator, math, shutil
+import functools, itertools, operator, math, shutil
 T = TypeVar("T")
 
 ARGS = {k.upper(): v for k, v in (arg.split('=') for arg in sys.argv[1:] if '=' in arg)}
@@ -36,6 +36,15 @@ def fully_flatten(l):
     for li in l: flattened.extend(fully_flatten(li))
     return flattened
   return [l]
+@functools.lru_cache(maxsize=None)
+def canonicalize_strides(shape:tuple[int, ...], strides:tuple[int, ...]) -> tuple[int, ...]:
+  return tuple(0 if s == 1 else st for s, st in zip(shape, strides))
+@functools.lru_cache(maxsize=None)
+def strides_for_shape(shape:tuple[int, ...]) -> tuple[int, ...]:
+  if not shape: return ()
+  strides = tuple(itertools.accumulate(reversed(shape[1:]), operator.mul, initial=1))[::-1]
+  return canonicalize_strides(shape, strides)
+
 def navigate_history(get_history_entry, total_entries):
   if get_history_entry is None:
     raise ValueError("get_history_entry must be provided")
