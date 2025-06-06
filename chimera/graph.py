@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Callable, TypeVar
-from chimera.helpers import DEBUG, TRACK_REWRITES, navigate_history, canonicalize_strides
+from chimera.helpers import DEBUG, TRACK_REWRITES, LOG_REWRITE_FAILURES, navigate_history, canonicalize_strides
 from chimera.nodes import *
 import inspect, functools
 
@@ -74,8 +74,13 @@ class PatternMatcher:
   def rewrite(self, node:Node, ctx=None) -> tuple[any|None, Pat|None]:
     for p,fxn,has_ctx in self.pdict.get(type(node), []):
       vars = {}
-      if p.match(node,  vars):
-        rewritten = fxn(ctx=ctx, **vars) if has_ctx else fxn(**vars)
+      if p.match(node, vars):
+        if LOG_REWRITE_FAILURES:
+          try: rewritten = fxn(ctx=ctx, **vars) if has_ctx else fxn(**vars)
+          except Exception as e:
+            e.add_note(f"Pattern that caused exception:\n{p}\n\n{node.get_print_tree()}")
+            raise e
+        else: rewritten = fxn(ctx=ctx, **vars) if has_ctx else fxn(**vars)
         return rewritten, p
     return None, None
 
@@ -104,6 +109,7 @@ def refactor_debug(ctx:RewriteContext, x:Debug) -> Var:
   ctx.post[x] = Debug(var)
   ctx.post[x.data] = Free(var)
   return create_loop(ctx, Store(var, x.data))
+
 def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   sources = list(parent.sources)
   for i,arr in enumerate(sources): 
@@ -113,27 +119,52 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
       ctx.pre[arr] = Assign(var)
     sources[i] = ctx.pre[arr].var
   return None if sources == list(parent.sources) else parent.copy(sources)
+
 def create_loop(ctx:RewriteContext, node:Node) -> Loop:
-  print(node.shape)
   indices = [Var(0, "idx") for _ in range(len(node.shape))]
   shape = node.shape
   node = Index(node, indices)
-  for idx,dim in zip(indices, reversed(shape)):
+  for idx,dim in zip(indices, shape):
     node = Loop(idx, dim, node)
   return node
+
 def propagate_index(idx: Index) -> Node:
   sources = map(lambda x: x if x.shape == () else Index(x, idx.indices), idx.data.sources)
-  return idx.data.copy(sources, idx.data._arg, idx.data.dtype, idx.view)
+  return idx.data.copy(sources, idx.data._arg, idx.data.dtype, idx.shape)
+
+def merge_index(idx1:Index, idx2:Index):
+  merged_indices = []
+  parent_index = 0
+  offset = prod(idx2.data.shape[len(idx2.indices):len(idx2.indices)+len(idx1.indices)], Const(1))
+  for i in idx2.indices:
+    assert isinstance(i, (Const, Slice, Var)), f"Invalid index type: {type(i).__name__}, value: {i}"
+    if isinstance(i, Const) or parent_index == len(idx1.indices):
+      merged_indices.append(i)
+      continue
+    elif isinstance(i, Slice):
+      merged_indices.append((idx1.indices[parent_index] * i.step + i.begin))
+    elif isinstance(i, Var):
+      merged_indices.append(idx1.indices[parent_index] * i)
+    parent_index += 1
+  for i in range(parent_index, min(len(idx1.indices), len(idx2.indices) + len(idx2.shape))):
+    merged_indices.append(idx1.indices[i])
+  return Index(idx2.data, merged_indices) if merged_indices else idx2.data
+
 def shrink(idx:Index, expand:Expand) -> Index:
-  return Index(expand.node, canonicalize_strides(expand.node.shape, idx.indices))
+  if expand.node.shape == (): return expand.node
+  return Index(expand.node, tuple(0 if s == 1 else i for s, i in zip(expand.node.shape, idx.indices[len(expand.shape)-len(expand.node.shape):])))
+
 def lower_index_reshape(idx:Index, reshape:Reshape) -> Index:
   offset = Const(0)
-  for i, stride in zip(idx.indices[::-1], strides_for_shape(reshape.shape)): offset += i * stride
+  for i, stride in zip(idx.indices, strides_for_shape(reshape.shape)): offset += i * stride
   new_indices = []
   for s in reversed(reshape.node.shape):
     new_indices.append(offset % s)
     offset = offset / s
-  return Index(reshape.node, tuple(new_indices))
+  return Index(reshape.node, tuple(reversed(new_indices)))
+
+# def lower_index_slice(idx:Index, slice:Slice) -> Index:
+#   return Index(idx.data, (i if isinstance(i, slice) else i for i in idx.indices))
 
 base_rewrite = PatternMatcher([
   # Refactor print statements to use malloc/free
@@ -145,8 +176,7 @@ base_rewrite = PatternMatcher([
 index_collapse_rewrite = PatternMatcher([
     # Propagate indexing down the graph
     (Pat(Index, name="idx", sources=Pat((BinaryOp, Store)), fuzzy_source_match=True), propagate_index),
-    (Pat(Index, name="idx1", sources=Pat(Index, name="idx2"), fuzzy_source_match=True),
-     lambda idx1, idx2: Index(idx2.data, idx2.indices + idx1.indices[len(idx2.shape):])),
+    (Pat(Index, name="idx1", sources=Pat(Index, name="idx2"), fuzzy_source_match=True), merge_index),
     (Pat(Index, name="idx", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), shrink),
     (Pat(Index, name="idx", sources=Pat(Reshape, name="reshape"), fuzzy_source_match=True), lower_index_reshape),
     (Pat(Index, name="idx", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda idx, var: Load(var, idx.indices)),
@@ -161,7 +191,7 @@ symbolic = PatternMatcher([
   (Pat.cvar("x1") + Pat.var("x2"), lambda x1,x2: x2 + x1),
   (Pat.cvar("x1") * Pat.var("x2"), lambda x1,x2: x2 * x1),
 
-  (Pat(Loop, predicate=lambda x: isinstance(x.idx.data, Const) and x.stop.value - x.idx.data.value == 1, name="x"),
+  (Pat(Loop, predicate=lambda x: isinstance(x.idx.data, Const) and isinstance(x.stop, Const) and x.stop.value - x.idx.data.value == 1, name="x"),
    lambda x: x.scope),
 
   (Pat.var("x") + 0, lambda x: x), # x+0 -> x
@@ -226,7 +256,7 @@ def apply_rewrite_passes(graph:Node) -> Node:
   graph = rewrite_graph(graph, index_collapse_rewrite)
 
   # Symbolic rewrite
-  graph = rewrite_graph(graph, symbolic)
+  # graph = rewrite_graph(graph, symbolic)
   return graph
 
 def linearize(ast:Node) -> tuple[Node]:

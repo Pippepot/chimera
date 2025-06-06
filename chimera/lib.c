@@ -34,9 +34,13 @@ static void build_string(char* buf, size_t* pos, char* base, int dim, int dims,
     buf[(*pos)++] = ']';
 }
 
-char* array_to_string(void* p, size_t item_size, size_t total_size,
+char* array_to_string(void* p, size_t item_size,
                       int* shape, int dims, int* strides,
                       const char* format, fmt_func_t formatter) {
+    size_t total_size = 0;
+    for (int i = 0; i < dims; i++) {
+        total_size += *(shape + i) * *(strides + i);
+    }
     // rough estimate
     size_t buf_size = total_size * 16 + dims * 2 + total_size * 2 + 1;
     char* result = malloc(buf_size);

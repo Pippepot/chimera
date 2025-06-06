@@ -19,9 +19,9 @@ class CompileOption:
     def __gt__(self, x): return self.value > x
     def __lt__(self, x): return self.value < x
 
-DEBUG, TRACK_REWRITES = CompileOption("DEBUG"), CompileOption("TRACK_REWRITES")
+DEBUG, TRACK_REWRITES, LOG_REWRITE_FAILURES = CompileOption("DEBUG"), CompileOption("TRACK_REWRITES"), CompileOption("LOG_REWRITE_FAILURES")
 
-def prod(x:Iterable[T]) -> T|int: return functools.reduce(operator.mul, x, 1)
+def prod(x:Iterable[T], initial:int=1) -> T|int: return functools.reduce(operator.mul, x, initial)
 def tupled(x) -> tuple: return tuple(x) if isinstance(x, Iterable) else (x,)
 def listed(x) -> list: return list(x) if isinstance(x, Iterable) else [x]
 def all_same(items:tuple[T, ...]|list[T]): return all(x == items[0] for x in items)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 from chimera.dtype import DType, dtypes
 from chimera.helpers import fully_flatten, get_shape, all_same, listed, tupled, prod, strides_for_shape
-from chimera.view import View
 from dataclasses import dataclass
 import weakref
 
@@ -12,7 +11,6 @@ class NodeMetaClass(type):
     node._sources = getattr(node, "_sources", ())
     node._arg = getattr(node, "_arg", None)
     node._dtype = getattr(node, "_dtype", dtypes.void)
-    node._view = getattr(node, "_view", View.create())
     node._shape = getattr(node, "_shape", ())
     return NodeMetaClass.register(node)
   @classmethod
@@ -30,23 +28,19 @@ class Node(metaclass=NodeMetaClass):
   _sources:tuple[Node]
   _arg:any
   _dtype:DType
-  _view:View
   _shape:tuple[int]
   @property
   def sources(self) -> tuple[Node]: return self._sources
   @property
   def dtype(self) -> DType: return self._dtype
   @property
-  def view(self) -> View: return self._view
-  @property
   def shape(self) -> tuple[int, ...]: return self._shape
 
-  def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, view:View=None, shape:tuple[int]=None) -> Node:
+  def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, shape:tuple[int]=None) -> Node:
     new_node:Node = self.__class__.__new__(self.__class__)
     new_node._sources = tupled(sources) if sources is not None else self._sources
     new_node._arg = arg if arg is not None else self._arg
     new_node._dtype = dtype if dtype is not None else self._dtype
-    new_node._view = view if view is not None else self._view
     new_node._shape = shape if shape is not None else self._shape
     new_node = NodeMetaClass.register(new_node)
     assert not self.sources or len(self.sources) == len(new_node.sources), f"New sources must be of same length as original: Expected {len(self._sources)}, Actual {len(new_node.sources)}.\nOriginal node: {self}"
@@ -103,14 +97,11 @@ class Var(Node):
     data = Node.to_node(data)
     assert isinstance(data, (Allocate, Array, Const)), f"data is not valid type. {data}"
     self._sources = (data,)
-    self._view = self.data.view
-    self._shape = self.data._shape
+    self._shape = self.data.shape
     self._dtype = self.data.dtype
-    self._arg = (name, data.strides if isinstance(data, Array) else strides_for_shape(data.shape))
+    self._arg = (name,)
   @property
   def name(self) -> str: return self._arg[0]
-  @property
-  def strides(self) -> Node: return self._arg[1]
   @property
   def data(self) -> Node: return self.sources[0]
   def __repr__(self): return self.name
@@ -123,12 +114,11 @@ class Assign(Node):
 
 class Allocate(Node):
   def __init__(self, shape:tuple[int], dtype:DType):
-    self._arg = dtype.itemsize * prod(shape)
+    self._sources = (prod(shape, Const(dtype.itemsize)),)
     self._dtype = dtype
-    # self._view = data.view
     self._shape = shape
   @property
-  def size(self) -> int: return self._arg
+  def size(self) -> int: return self._sources[0]
 
 class Free(Node):
   def __init__(self, var:Var):
@@ -139,7 +129,6 @@ class Free(Node):
 class Store(Node):
   def __init__(self, data:Node, value:Node):
     self._sources = (data, value)
-    self._view = data.view
     self._shape = data.shape
     self._dtype = data.dtype
   @property
@@ -149,26 +138,42 @@ class Store(Node):
 
 class Array(Node):
   def __init__(self, data:list):
-    self._view = View.create(get_shape(data))
     self._shape = get_shape(data)
-    self._arg = (tuple(fully_flatten(data)), self._view.strides)
+    self._arg = tuple(fully_flatten(data))
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
     self._dtype = dtypes.python_to_dtype[type(self.data[0])]
   @property
-  def data(self) -> tuple: return self._arg[0]
+  def data(self) -> tuple: return self._arg
+
+class Slice(Node):
+  def __init__(self, begin:int|Const, end:int|Const, step:int|Const=Const(1)):
+    begin, end, step = Node.to_node(begin), Node.to_node(end), Node.to_node(step)
+    assert type(begin) == type(end) == type(step) == Const, f"Arguments has to be const.\nBegin: {begin}\End: {end}\Step: {step}"
+    self._sources = (begin, end, step)
+    self._arg = (end - begin) / step
   @property
-  def strides(self) -> int: return self._arg[1]
+  def begin(self) -> Const: return self._sources[0]
+  @property
+  def step(self) -> Const: return self._sources[2]
+  @property
+  def length(self) -> BinaryOp: return self._arg
+
+IndexerType = int|Const|Slice
 
 class Index(Node):
-  def __init__(self, data:Node, indices:int|Const|list[int|Const]):
-    assert isinstance(indices, (int, list, tuple)) or (isinstance(indices, Const|Var) and indices.dtype is dtypes.int32), f"Expected indices to be int, Const, Var or list thereof but got {indices}"
-    indices = tuple(map(Node.to_node, listed(indices)))
+  def __init__(self, data:Node, indices:IndexerType|list[IndexerType]):
+    indices = listed(indices)
     assert data.shape != (), f"Cannot index node with no shape {data}"
     assert len(indices) > 0, f"Cannot index {data} with no indices"
-    strides = data.view.strides[:len(data.shape) - len(indices)]
+    for i in indices:
+      assert isinstance(i, (int, Slice)) or (isinstance(i, (Const, Var, BinaryOp)) and i.dtype is dtypes.int32), f"Expected indices to be int, Const, Var, Slice or list thereof but got {indices}"
+    indices = tuple(map(Node.to_node, indices))
     self._sources = (data, *indices)
-    self._view = View.create(self.data.shape[len(indices):], strides)
-    self._shape = self.data.shape[len(indices):]
+    shape = []
+    for i, s in enumerate(self.data.shape): 
+      if i >= len(indices): shape.append(s)
+      elif isinstance(indices[i], Slice): shape.append(indices[i].length)
+    self._shape = tuple(shape)
     self._dtype = self.data.dtype
   @property
   def data(self) -> Node: return self.sources[0]
@@ -178,9 +183,10 @@ class Index(Node):
 class Load(Node):
   def __init__(self, data:Var, indices:int|Const|list[int|Const]):
     assert isinstance(data, Var), "Only variables can be loaded"
-    assert len(data.strides) == len(indices), f"Indices has to match data shape.\nIndices: {indices}\nStrides: {data.strides}\nNode: {data}"
+    strides = strides_for_shape(data.shape)
+    assert len(strides) == len(indices), f"Indices has to match data shape.\nIndices: {indices}\nStrides: {data.strides}\nNode: {data}"
     indexer = Const(0)
-    for idx, stride in zip(reversed(indices), data.strides):
+    for idx, stride in zip(indices, strides):
       indexer = indexer + idx * stride
     self._sources = (data, indexer)
   @property
@@ -192,9 +198,7 @@ class Loop(Node):
   def __init__(self, start:Var|Const, stop:Const, scope:Node):
     if not isinstance(start, Var): start = Var(Node.to_node(start), "idx")
     self._sources = (Assign(start), Node.to_node(stop), scope)
-    self._view = scope.view
     self._shape = scope.shape
-    assert isinstance(self.stop, Const), f"Loop stop must be a constant but got {type(self.stop)}"
   @property
   def assign(self) -> Assign: return self.sources[0]
   @property
@@ -208,10 +212,9 @@ class BinaryOp(Node):
   def __init__(self, op, left:Node, right:Node):
     self._sources = (left, right)
     self._arg = op
-    views = [self.left.view, self.right.view]
-    self._sources = tuple(s if s.view == v else Expand(s, v.shape) for s,v in zip(self.sources, self._broadcast_views(views)))
-    self._view = self.left.view if len(self.left.shape) >= len(self.right.shape) else self.right.view
-    self._shape = self.left.shape if len(self.left.shape) >= len(self.right.shape) else self.right.shape
+    left, right, shape = self._broadcast_sources(left, right)
+    self._sources = (left, right)
+    self._shape = shape
     self._dtype = self.left.dtype # TODO resolve better
   @property
   def op(self): return self._arg
@@ -219,24 +222,18 @@ class BinaryOp(Node):
   def left(self): return self.sources[0]
   @property
   def right(self): return self.sources[1]
-  def _broadcast_views(self, views_in:tuple[View]) -> tuple[View]:
-    empty_idx:list[int] = []
-    views:list[View] = []
-    for i,view in enumerate(views_in):
-      if view.shape == (): empty_idx.append(i)
-      else: views.append(view)
-    if not len(views): return views_in
-
-    max_shape = max(len(view.shape) for view in views)
-    # Left align shapes
-    shapes = [(1,)*(max_shape - len(view.shape)) + view.shape for view in views]
-    strides = [(0,)*(max_shape - len(view.strides)) + view.strides for view in views]
-    new_shape = tuple(max(shape[i] for shape in shapes) for i in range(max_shape))
-    assert all(all(dim == 1 or dim == new_dim for dim,new_dim in zip(shape, new_shape)) for shape in shapes),\
-      f"Cannot broadcast shapes {(v.shape for v in views)}"
-    views = [View.create(new_shape, stride) for stride in strides]
-    for i in empty_idx: views.insert(i, View.create())
-    return tuple(views)
+  def _broadcast_sources(self, left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
+    if not left.shape and not right.shape: return left, right, ()
+    target_length = max(len(left.shape), len(right.shape))
+    shapes = [(1,)*(target_length - len(s)) + s for s in [left.shape, right.shape]]
+    target_shape = []
+    for l, r in zip(shapes[0], shapes[1]):
+      assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
+      target_shape.append(max(l, r))
+    target_shape = tuple(target_shape)
+    if left.shape != target_shape: left = Expand(left, target_shape)
+    elif right.shape != target_shape: right = Expand(right, target_shape)
+    return left, right, target_shape
   def __repr__(self): return f"{super().__repr__()} {self.op}"
 
 class Expand(Node):
@@ -254,7 +251,6 @@ class Reshape(Node):
   def __init__(self, node:Node, shape:tuple[int, ...]):
     assert prod(node.shape) == prod(shape), f"Cannot reshape {node.shape} to {shape} as they differ in size ({prod(node.shape)}, {prod(shape)})"
     self._sources = (node,)
-    # self._view = View.create(shape) # TODO: take previous view into account
     self._shape = shape
     self._dtype = self.node.dtype
   @property
@@ -263,7 +259,6 @@ class Reshape(Node):
 class Debug(Node):
   def __init__(self, data:Node):
     self._sources = (data,)
-    self._view = data.view
     self._shape = data.shape
     self._dtype = data.dtype
   @property

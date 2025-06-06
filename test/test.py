@@ -11,39 +11,25 @@ DEBUG.value = 0
 
 class Test(unittest.TestCase): 
   def test_print_array(self):
-    ast = Debug(Array([1, 2]))
-    self.assertEqual(self.parse(ast), '[1, 2]\n')
+    self.assert_program(Array([1, 2]), '[1, 2]')
 
   def test_print_multi_array(self):
-    ast = Debug(Array([[1, 2],[3, 4]]))
-    self.assertEqual(self.parse(ast), '[[1, 2], [3, 4]]\n')
+    self.assert_program(Array([[1, 2],[3, 4]]), '[[1, 2], [3, 4]]')
 
   def test_add_array(self):
-    ast = Debug(BinaryOp('+', Array([1, 2]), Const(3)))
-    self.assertEqual(self.parse(ast), '[4, 5]\n')
+    self.assert_program(Array([1, 2]) + 3, '[4, 5]')
 
   def test_broadcast(self):
-    ast = Debug(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]))
-    self.assertEqual(self.parse(ast), '[[5, 4, 30], [20, 10, 60]]\n')
+    self.assert_program(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]), '[[5, 4, 30], [20, 10, 60]]')
 
   def test_reshape(self):
-    ast = Debug(Reshape(Array([[1,2,3], [4,5,6]]), (1, 3, 2)))
-    self.assertEqual(self.parse(ast), '[[[1, 2], [3, 4], [5, 6]]]\n')
+    self.assert_program(Reshape(Array([[1,2,3], [4,5,6]]), (1, 3, 2)), '[[[1, 2], [3, 4], [5, 6]]]')
 
   def test_index_propagation(self):
-    ast = Debug(
-      Index(
-        BinaryOp(
-          op='+',
-          left=BinaryOp(
-            op='*',
-            left=Array([15, 20]), 
-            right=Index(Array([40, 50]), Const(1))), 
-          right=Const(15)),
-        Const(0)))
-    self.assertEqual(self.parse(ast), '765\n')
+    self.assert_program(Index(Array([15, 20]) * Index(Array([40, 50]), 1) + 15, 0), '765')
 
-  def parse(self, ast): return compiler.compile(*renderer.render(parse_ast(ast)))
+  def assert_program(self, ast, truth):
+    return self.assertEqual(compiler.compile(*renderer.render(parse_ast(Debug(ast)))), truth + '\n')
 
 if __name__ == '__main__':
     unittest.main()
