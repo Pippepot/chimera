@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Callable, TypeVar
 from chimera.helpers import DEBUG, TRACK_REWRITES, LOG_REWRITE_FAILURES, navigate_history, canonicalize_strides
 from chimera.nodes import *
-import inspect, functools
+import inspect, functools, operator
 
 def print_procedure(nodes:list[Node]):
   for i,n in enumerate(nodes):
@@ -182,10 +182,16 @@ index_collapse_rewrite = PatternMatcher([
     (Pat(Index, name="idx", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda idx, var: Load(var, idx.indices)),
 ])
 
+python_alu: dict[str, Callable]  = {
+  "+":operator.add, "-":operator.sub, "*":operator.mul, "/":operator.truediv, "%":operator.mod}
+
+def execute_alu(op:str, operands):
+  if op == '/' and all(isinstance(o, int) for o in operands): return Const(operands[0] // operands[1])
+  return Const(python_alu[op](*operands))
+
 symbolic = PatternMatcher([
   # Constant folding
-  (Pat.cvar("x1") + Pat.cvar("x2"), lambda x1,x2: Const(x1.value + x2.value)),
-  (Pat.cvar("x1") * Pat.cvar("x2"), lambda x1,x2: Const(x1.value * x2.value)),
+  (Pat(BinaryOp, name="op", sources=(Pat(Const), Pat(Const))), lambda op: execute_alu(op.op, [x.value for x in op.sources])),
 
   # Move constants to the end
   (Pat.cvar("x1") + Pat.var("x2"), lambda x1,x2: x2 + x1),
@@ -256,7 +262,7 @@ def apply_rewrite_passes(graph:Node) -> Node:
   graph = rewrite_graph(graph, index_collapse_rewrite)
 
   # Symbolic rewrite
-  # graph = rewrite_graph(graph, symbolic)
+  graph = rewrite_graph(graph, symbolic)
   return graph
 
 def linearize(ast:Node) -> tuple[Node]:

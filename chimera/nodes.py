@@ -114,11 +114,13 @@ class Assign(Node):
 
 class Allocate(Node):
   def __init__(self, shape:tuple[int], dtype:DType):
-    self._sources = (prod(shape, Const(dtype.itemsize)),)
+    self._sources = (prod(shape, Const(dtype.itemsize)),) + tuple(map(self.to_node, shape))
     self._dtype = dtype
     self._shape = shape
   @property
-  def size(self) -> int: return self._sources[0]
+  def length(self) -> int: return self.sources[0]
+  @property
+  def size(self) -> int: return self.sources[1:]
 
 class Free(Node):
   def __init__(self, var:Var):
