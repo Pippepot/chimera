@@ -1,12 +1,7 @@
 from __future__ import annotations
-from chimera.patternmatcher import PatternMatcher, Pat, RewriteContext, rewrite_graph
+from chimera.rewrite import PatternMatcher, Pat, RewriteContext, rewrite_graph, linearize
 from chimera.helpers import DEBUG, prod
 from chimera.nodes import *
-
-def print_procedure(nodes:list[Node]):
-  for i,n in enumerate(nodes):
-    formatted_parents = [nodes.index(x) if x in nodes else "--" for x in n.sources]
-    print(f"{i:4d} {str(n):20s}: {str(n.dtype.name):8s} {str(formatted_parents):16s}")
 
 def refactor_debug(ctx:RewriteContext, x:Debug) -> Var:
   var = Var(Reshape(Allocate(prod(x.data.shape, Const(1)), x.data.dtype), x.data.shape), "dbg")
@@ -26,7 +21,7 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   return None if sources == list(parent.sources) else parent.copy(sources)
 
 def create_loop(node:Node) -> Loop:
-  indices = [Var(0, f"idx{i}") for i in range(len(node.shape))]
+  indices = [Var(0, f"idx") for _ in range(len(node.shape))]
   shape = node.shape
   node = Index(node, indices)
   for idx,dim in zip(reversed(indices), reversed(shape)):
@@ -68,11 +63,14 @@ def lower_index_reshape(idx:Index, reshape:Reshape) -> Index:
     offset = offset / s
   return Index(reshape.node, tuple(reversed(new_indices)))
 
+def lower_index_permute(idx:Index, permute:Permute):
+  return Index(permute.node, tuple(idx.indices[permute.inverse_permutation[i]] for i in range(len(idx.indices))))
+
 base_rewrite = PatternMatcher([
   # Refactor print statements to use malloc/free
   (Pat(Debug, predicate=lambda x: x.data.shape != (), name="x"), refactor_debug),
   # Move array to assignments
-  (Pat((BinaryOp, Expand, Reshape, Store, Index), name="parent"), assign_array),
+  (Pat((BinaryOp, Expand, Reshape, Permute, Store, Index), name="parent"), assign_array),
 ])
 
 index_collapse_rewrite = PatternMatcher([
@@ -81,6 +79,7 @@ index_collapse_rewrite = PatternMatcher([
     (Pat(Index, name="idx1", sources=Pat(Index, name="idx2"), fuzzy_source_match=True), merge_index),
     (Pat(Index, name="idx", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), shrink),
     (Pat(Index, name="idx", sources=Pat(Reshape, name="reshape"), fuzzy_source_match=True), lower_index_reshape),
+    (Pat(Index, name="idx", sources=Pat(Permute, name="permute"), fuzzy_source_match=True), lower_index_permute),
     (Pat(Index, name="idx", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda idx, var: Load(var, idx.indices)),
 ])
 
@@ -95,22 +94,6 @@ def apply_rewrite_passes(graph:Node) -> Node:
   # Symbolic rewrite
   graph = graph.simplify()
   return graph
-
-def linearize(ast:Node) -> tuple[Node]:
-  def _get_children_dfs(node:Node, visited:dict[Node, None]):
-    if node in visited: return
-    for dim in node.shape:
-      _get_children_dfs(dim, visited)
-    for source in node.sources:
-      _get_children_dfs(source, visited)
-    visited.update(dict.fromkeys(node.shape, None))
-    visited.update(dict.fromkeys(node.sources, None))
-
-  visited:dict[Node, None] = {}
-  _get_children_dfs(ast, visited)
-  visited = tuple(visited)
-  if DEBUG >= 2: print_procedure(visited)
-  return visited
 
 def parse_ast(ast:list[Node]|Node) -> tuple[Node]:
   if not isinstance(ast, Program): ast = Program(ast)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from chimera.nodes import *
-from chimera.patternmatcher import PatternMatcher, Pat
+from chimera.rewrite import PatternMatcher, Pat
 from chimera.dtype import dtypes
 from chimera.helpers import TRACK_REWRITES, navigate_history
 

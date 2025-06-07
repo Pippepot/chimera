@@ -70,7 +70,7 @@ class Node(metaclass=NodeMetaClass):
   def simplify(self):
     if isinstance(self, Const): return self
     from chimera.symbolic import symbolic
-    from chimera.patternmatcher import rewrite_graph
+    from chimera.rewrite import rewrite_graph
     return rewrite_graph(self, symbolic)
 
   @staticmethod
@@ -276,6 +276,22 @@ class Reshape(Node):
     self._dtype = self.node.dtype
   @property
   def node(self) -> Node: return self.sources[0]
+
+class Permute(Node):
+  def __init__(self, node:Node, axes:tuple[int, ...]):
+    axes = tupled(axes)
+    assert len(node.shape) == len(axes), f"Shape of {node}, {node.shape} does not have the same length as axes {axes}"
+    assert all(i == a for i,a in enumerate(sorted(axes))), f"Invalid axes {axes} for shape {node.shape}"
+    self._sources = (node,)
+    self._shape = tuple(node.shape[i] for i in axes)
+    self._dtype = self.node.dtype
+    inv = [0] * len(axes)
+    for d, pd in enumerate(axes): inv[pd] = d
+    self._arg = tuple(inv)
+  @property
+  def node(self) -> Node: return self.sources[0]
+  @property
+  def inverse_permutation(self) -> tuple[int]: return self._arg
 
 class Debug(Node):
   def __init__(self, data:Node):

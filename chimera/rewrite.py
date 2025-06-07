@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Callable, TypeVar
-from chimera.helpers import TRACK_REWRITES, LOG_REWRITE_FAILURES, navigate_history
+from chimera.helpers import DEBUG, TRACK_REWRITES, LOG_REWRITE_FAILURES, navigate_history
 from chimera.nodes import *
 import inspect, functools
 
@@ -139,3 +139,24 @@ def rewrite_graph(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None) 
   rewrite = recurse_rewrite_graph(graph, rewriter, ctx)
   if TRACK_REWRITES: navigate_history(lambda i: _get_history_entry(ctx.tracker, graph, i-1), len(ctx.tracker) + 1)
   return rewrite
+
+def print_procedure(nodes:list[Node]):
+  for i,n in enumerate(nodes):
+    formatted_parents = [nodes.index(x) if x in nodes else "--" for x in n.sources]
+    print(f"{i:4d} {str(n):20s}: {str(n.dtype.name):8s} {str(formatted_parents):16s}")
+
+def linearize(ast:Node) -> tuple[Node]:
+  def _get_children_dfs(node:Node, visited:dict[Node, None]):
+    if node in visited: return
+    for dim in node.shape:
+      _get_children_dfs(dim, visited)
+    for source in node.sources:
+      _get_children_dfs(source, visited)
+    visited.update(dict.fromkeys(node.shape, None))
+    visited.update(dict.fromkeys(node.sources, None))
+
+  visited:dict[Node, None] = {}
+  _get_children_dfs(ast, visited)
+  visited = tuple(visited)
+  if DEBUG >= 2: print_procedure(visited)
+  return visited

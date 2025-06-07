@@ -5,7 +5,7 @@ from chimera.nodes import *
 from chimera.graph import parse_ast
 from chimera.helpers import DEBUG
 from chimera import renderer, compiler
-import unittest
+import unittest, re
 
 DEBUG.value = 0
 
@@ -31,11 +31,15 @@ class Test(unittest.TestCase):
   def test_slice_simple(self):
     self.assert_program(Index(Array([1, 2, 3]), Slice(1, 3)), '[2, 3]')
 
-  def test_slice(self):
+  def test_slice(self): 
     self.assert_program(Index(Array([[1,2,3],[4,5,6]]), (1, Slice(0, 3, 2))), '[4, 6]')
+
+  def test_permute(self): 
+    self.assert_program(Permute(Array([[[1,2,3], [4,5,6]], [[7,8,9], [10,11,12]]]), (2, 0, 1)), '[[[1, 4], [7, 10]], [[2, 5], [8, 11]], [[3, 6], [9, 12]]]')
   
   def assert_program(self, ast, truth):
-    return self.assertEqual(compiler.compile(*renderer.render(parse_ast(Debug(ast)))), truth + '\n')
+    strip_ws = lambda s: re.sub(r"\s+", "", s)
+    return self.assertEqual(strip_ws(compiler.compile(*renderer.render(parse_ast(Debug(ast))))), strip_ws(truth))
 
 if __name__ == '__main__':
     unittest.main()
