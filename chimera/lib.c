@@ -34,21 +34,32 @@ static void build_string(char* buf, size_t* pos, char* base, int dim, int dims,
     buf[(*pos)++] = ']';
 }
 
-char* array_to_string(void* p, size_t item_size,
-                      int* shape, int dims, int* strides,
+char* array_to_string(void* p, size_t item_size, int* shape, int dims,
                       const char* format, fmt_func_t formatter) {
-    size_t total_size = 0;
+    int total = 1;
     for (int i = 0; i < dims; i++) {
-        total_size += *(shape + i) * *(strides + i);
+        total *= shape[i];
     }
-    // rough estimate
-    size_t buf_size = total_size * 16 + dims * 2 + total_size * 2 + 1;
-    char* result = malloc(buf_size);
-    if (!result)
-        return NULL;
     
+    int* strides = malloc(sizeof(int) * dims);
+    if (!strides) return NULL;
+
+    strides[dims - 1] = 1;
+    for (int i = dims - 2; i >= 0; --i) {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    // Rough buffer size: 
+    // Assume <=16 chars per element + 2 chars per bracket comma + 1 for '\0'
+    size_t buf_size = (size_t)total * 16 + dims * 2 + 1;
+    char* buf = malloc(buf_size);
+    if (!buf) {
+        free(strides);
+        return NULL;
+    }
+
     size_t pos = 0;
-    build_string(result, &pos, (char*)p, 0, dims, shape, strides, item_size, format, formatter);
-    result[pos] = '\0';
-    return result;
+    build_string(buf, &pos, (char*)p, 0, dims, shape, strides, item_size, format, formatter);
+    buf[pos] = '\0';
+    return buf;
 }

@@ -28,6 +28,12 @@ class Test(unittest.TestCase):
   def test_index_propagation(self):
     self.assert_program(Index(Array([15, 20]) * Index(Array([40, 50]), 1) + 15, 0), '765')
 
+  def test_slice_simple(self):
+    self.assert_program(Index(Array([1, 2, 3]), Slice(1, 3)), '[2, 3]')
+
+  def test_slice(self):
+    self.assert_program(Index(Array([[1,2,3],[4,5,6]]), (1, Slice(0, 3, 2))), '[4, 6]')
+  
   def assert_program(self, ast, truth):
     return self.assertEqual(compiler.compile(*renderer.render(parse_ast(Debug(ast)))), truth + '\n')
 

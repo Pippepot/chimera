@@ -1,15 +1,14 @@
 from __future__ import annotations
 from chimera.nodes import *
-from chimera.graph import PatternMatcher, Pat
+from chimera.patternmatcher import PatternMatcher, Pat
 from chimera.dtype import dtypes
 from chimera.helpers import TRACK_REWRITES, navigate_history
 
 op_rendering: dict = {
-  '+': lambda a,b: f"({a}+{b})",
-  '-': lambda a,b: f"({a}-{b})",
-  '*': lambda a,b: f"({a}*{b})",
-  '/': lambda a,b: f"({a}/{b})",
+  '+': lambda a,b: f"({a}+{b})", '-': lambda a,b: f"({a}-{b})",
+  '*': lambda a,b: f"({a}*{b})", '/': lambda a,b: f"({a}/{b})",
   '%': lambda a,b: f"({a}%{b})",
+  'max': lambda a,b: f"({a}>{b}?{a}:{b})",
 }
 
 class NodeGroup:
@@ -21,9 +20,6 @@ class TypeGroup:
 
 dtype_to_str = {dtypes.int32:'int', dtypes.float32:'float', None:'void'}
 
-# def render_function(func:Function, name:str, ctx) -> tuple[str, str]:
-#   arg_string = ', '.join(f'{dtype_to_str[arg.dtype]} {ctx[arg]}' for arg in func.args)
-#   return f"{dtype_to_str[None]} {name}({arg_string}) {{\n{append_indent(ctx[func.body], ';')}\n}}"
 def render_assign(ctx, x:Assign):
   # C initializes arrays and pointers with different syntax
   if isinstance(x.var.data, Array):
@@ -41,14 +37,13 @@ render_patterns = PatternMatcher([
   (Pat(Var, name='x'), lambda ctx, x: f'{x.name}{ctx[x.name]}'),
   (Pat(Assign, name='x'), render_assign),
   (Pat(Store, name='x'), lambda ctx, x: f"{ctx[x.data]} = {ctx[x.value]};"),
-  (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({ctx[x.length]})"),
+  (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({ctx[x.size]})"),
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]});"),
   (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n {append_indent(ctx[x.scope])}\n}}"),
   (Pat((Expand, Reshape), name='x'), lambda ctx, x: ctx[x.node]),
   (Pat(Load, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),
-  # (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.func]}({', '.join(ctx[arg] for arg in x.args)})"),
-  (Pat(Debug, sources=Pat(Var, name='x', sources=Pat(Allocate))),
-   lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, (int[]){render_array(ctx[s] for s in x.data.size)}, {len(x.shape)}, (int[]){render_array(strides_for_shape(x.data.size))}, "%{x.dtype.fmt}", {x.dtype.fmt}_fmt));'),
+  (Pat(Debug, sources=Pat(Var, name='x')),
+   lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, (int[]){render_array(ctx[s] for s in x.shape)}, {len(x.shape)}, "%{x.dtype.fmt}", {x.dtype.fmt}_fmt));'),
   (Pat(Debug, sources=Pat(Node, name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
   (Pat(BinaryOp, name='x'), lambda ctx, x: op_rendering[x.op](
     *[strip_parens(ctx[source]) if isinstance(source, BinaryOp) and source.op == x.op and x.op in NodeGroup.Associative else ctx[source] for source in x.sources]
@@ -77,9 +72,9 @@ def render(procedure:set[Node]):
       print("RENDER: Failed to parse", node)
       continue
     ctx[node] = rewrite
-    non_terminal.union(node.sources)
-    for source in node.sources:
-      if source in terminal: del terminal[source]
+    non_terminal.union(node.sources, node.shape)
+    for n in node.sources + node.shape:
+      if n in terminal: del terminal[n]
     if node not in non_terminal: terminal[node] = None
   
   if TRACK_REWRITES: print_tracked_rewrites(tracker)

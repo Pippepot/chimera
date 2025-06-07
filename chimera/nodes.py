@@ -1,8 +1,8 @@
 from __future__ import annotations
 from chimera.dtype import DType, dtypes
-from chimera.helpers import fully_flatten, get_shape, all_same, listed, tupled, prod, strides_for_shape
+from chimera.helpers import LOG_SHAPES, fully_flatten, get_shape, all_same, listed, tupled
 from dataclasses import dataclass
-import weakref
+import weakref, functools
 
 class NodeMetaClass(type):
   node_cache:dict[tuple, weakref.ReferenceType[Node]] = {}
@@ -28,15 +28,15 @@ class Node(metaclass=NodeMetaClass):
   _sources:tuple[Node]
   _arg:any
   _dtype:DType
-  _shape:tuple[int]
+  _shape:tuple[Const|Var|BinaryOp]
   @property
   def sources(self) -> tuple[Node]: return self._sources
   @property
   def dtype(self) -> DType: return self._dtype
   @property
-  def shape(self) -> tuple[int, ...]: return self._shape
+  def shape(self) -> tuple[Const|Var|BinaryOp, ...]: return self._shape
 
-  def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, shape:tuple[int]=None) -> Node:
+  def copy(self, sources:list[Node]=None, arg:any=None, dtype:DType=None, shape:tuple[Const|Var|BinaryOp]=None) -> Node:
     new_node:Node = self.__class__.__new__(self.__class__)
     new_node._sources = tupled(sources) if sources is not None else self._sources
     new_node._arg = arg if arg is not None else self._arg
@@ -59,6 +59,7 @@ class Node(metaclass=NodeMetaClass):
     if isinstance(self, Var):
       if self not in var_count: var_count.append(self)
       node_str += f" {var_count.index(self)}"
+    if LOG_SHAPES: node_str += f" shape={self.shape}"
     tree_str = indent + ("└─" if is_last else "├─") + node_str + "\n"
     indent += "  " if is_last else "│ "
     if self in visited: return tree_str
@@ -66,8 +67,26 @@ class Node(metaclass=NodeMetaClass):
     for i, source in enumerate(self.sources): tree_str += source._get_print_tree(visited, var_count, format_func, i == len(self.sources) - 1, indent)
     return tree_str
 
+  def simplify(self):
+    if isinstance(self, Const): return self
+    from chimera.symbolic import symbolic
+    from chimera.patternmatcher import rewrite_graph
+    return rewrite_graph(self, symbolic)
+
   @staticmethod
   def to_node(x): return x if isinstance(x, Node) else Const(x)
+  @functools.cached_property
+  def strides(self) -> tuple[Node]:
+    strides = []
+    stride = Const(1)
+    for s in self.shape[::-1]:
+      simp = s.simplify()
+      if simp == Const(1):
+        strides.append(Const(0))
+        continue
+      strides.append(stride)
+      stride *= simp
+    return tuple(reversed(strides))
 
   def __repr__(self): return self.__class__.__name__
   def __add__(self, x): return BinaryOp('+', self, Node.to_node(x))
@@ -75,7 +94,8 @@ class Node(metaclass=NodeMetaClass):
   def __mul__(self, x): return BinaryOp('*', self, Node.to_node(x))
   def __mod__(self, x): return BinaryOp('%', self, Node.to_node(x))
   def __truediv__(self, x): return BinaryOp('/', self, Node.to_node(x))
-  def __getitem__(self, key): return Index(self, key)
+  def __neg__(self): return self * (-1)
+  # def __getitem__(self, key): return Index(self, key)
 
 class Program(Node):
   def __init__(self, nodes:list[Node]|Node):
@@ -86,7 +106,6 @@ class Const(Node):
     assert isinstance(value, (int, float)), f"Const node can only have values of type int, float. Type was {type(value)}. {value}"
     self._arg = value
     self._dtype = dtypes.python_to_dtype[type(self.value)]
-    self._shape = ()
   @property
   def value(self): return self._arg
   def __repr__(self): return f"Const {self.value}"
@@ -95,7 +114,7 @@ class Var(Node):
   def __init__(self, data:Allocate|Array|Const, name:str="var"):
     assert data != None, "data should not be none"
     data = Node.to_node(data)
-    assert isinstance(data, (Allocate, Array, Const)), f"data is not valid type. {data}"
+    assert isinstance(data, (Allocate, Array, Const, Reshape)), f"data is not valid type. {data}"
     self._sources = (data,)
     self._shape = self.data.shape
     self._dtype = self.data.dtype
@@ -113,14 +132,13 @@ class Assign(Node):
   def var(self) -> Var: return self.sources[0]
 
 class Allocate(Node):
-  def __init__(self, shape:tuple[int], dtype:DType):
-    self._sources = (prod(shape, Const(dtype.itemsize)),) + tuple(map(self.to_node, shape))
+  def __init__(self, shape:Node, dtype:DType):
+    shape = shape.simplify()
+    self._sources = (shape * dtype.itemsize,)
+    self._shape = (shape,)
     self._dtype = dtype
-    self._shape = shape
   @property
-  def length(self) -> int: return self.sources[0]
-  @property
-  def size(self) -> int: return self.sources[1:]
+  def size(self) -> Node: return self.sources[0]
 
 class Free(Node):
   def __init__(self, var:Var):
@@ -140,7 +158,7 @@ class Store(Node):
 
 class Array(Node):
   def __init__(self, data:list):
-    self._shape = get_shape(data)
+    self._shape = tuple(map(self.to_node, get_shape(data)))
     self._arg = tuple(fully_flatten(data))
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
     self._dtype = dtypes.python_to_dtype[type(self.data[0])]
@@ -152,7 +170,7 @@ class Slice(Node):
     begin, end, step = Node.to_node(begin), Node.to_node(end), Node.to_node(step)
     assert type(begin) == type(end) == type(step) == Const, f"Arguments has to be const.\nBegin: {begin}\End: {end}\Step: {step}"
     self._sources = (begin, end, step)
-    self._arg = (end - begin) / step
+    self._arg = (end - begin + step - 1) / step # Negative (end - begin - step - 1) / (-step)
   @property
   def begin(self) -> Const: return self._sources[0]
   @property
@@ -185,10 +203,9 @@ class Index(Node):
 class Load(Node):
   def __init__(self, data:Var, indices:int|Const|list[int|Const]):
     assert isinstance(data, Var), "Only variables can be loaded"
-    strides = strides_for_shape(data.shape)
-    assert len(strides) == len(indices), f"Indices has to match data shape.\nIndices: {indices}\nStrides: {data.strides}\nNode: {data}"
+    assert len(data.strides) == len(indices), f"Indices has to match data shape.\nIndices: {indices}\nStrides: {data.strides}\nNode: {data}"
     indexer = Const(0)
-    for idx, stride in zip(indices, strides):
+    for idx, stride in zip(indices, data.strides):
       indexer = indexer + idx * stride
     self._sources = (data, indexer)
   @property
@@ -226,15 +243,18 @@ class BinaryOp(Node):
   def right(self): return self.sources[1]
   def _broadcast_sources(self, left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
     if not left.shape and not right.shape: return left, right, ()
-    target_length = max(len(left.shape), len(right.shape))
-    shapes = [(1,)*(target_length - len(s)) + s for s in [left.shape, right.shape]]
+    left_shape, right_shape = left.shape, right.shape
+    ls, rs = len(left.shape), len(right.shape)
+    if ls < rs: left_shape = (Const(1),)*(rs-ls) + left_shape
+    if rs < ls: right_shape = (Const(1),)*(ls-rs) + right_shape
     target_shape = []
-    for l, r in zip(shapes[0], shapes[1]):
-      assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
-      target_shape.append(max(l, r))
+    for l, r in zip(left_shape, right_shape):
+      # assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
+      # TODO record constraint, simplify
+      target_shape.append(BinaryOp('max', l, r).simplify())
     target_shape = tuple(target_shape)
-    if left.shape != target_shape: left = Expand(left, target_shape)
-    elif right.shape != target_shape: right = Expand(right, target_shape)
+    if left_shape != target_shape: left = Expand(left, target_shape)
+    if right_shape != target_shape: right = Expand(right, target_shape)
     return left, right, target_shape
   def __repr__(self): return f"{super().__repr__()} {self.op}"
 
@@ -251,9 +271,8 @@ class Expand(Node):
 
 class Reshape(Node):
   def __init__(self, node:Node, shape:tuple[int, ...]):
-    assert prod(node.shape) == prod(shape), f"Cannot reshape {node.shape} to {shape} as they differ in size ({prod(node.shape)}, {prod(shape)})"
     self._sources = (node,)
-    self._shape = shape
+    self._shape = tuple(self.to_node(s).simplify() for s in shape)
     self._dtype = self.node.dtype
   @property
   def node(self) -> Node: return self.sources[0]

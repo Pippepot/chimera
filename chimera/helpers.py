@@ -1,6 +1,5 @@
 from typing import TypeVar, Iterable
-import sys, os
-import functools, itertools, operator, math, shutil
+import sys, os, functools, itertools, operator, math, shutil
 T = TypeVar("T")
 
 ARGS = {k.upper(): v for k, v in (arg.split('=') for arg in sys.argv[1:] if '=' in arg)}
@@ -20,6 +19,7 @@ class CompileOption:
     def __lt__(self, x): return self.value < x
 
 DEBUG, TRACK_REWRITES, LOG_REWRITE_FAILURES = CompileOption("DEBUG"), CompileOption("TRACK_REWRITES"), CompileOption("LOG_REWRITE_FAILURES")
+LOG_SHAPES = CompileOption("LOG_SHAPES")
 
 def prod(x:Iterable[T], initial:int=1) -> T|int: return functools.reduce(operator.mul, x, initial)
 def tupled(x) -> tuple: return tuple(x) if isinstance(x, Iterable) else (x,)
