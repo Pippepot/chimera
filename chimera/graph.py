@@ -49,7 +49,7 @@ def merge_index(parent:Index, child:Index):
     merged_indices.append(parent.indices[i])
   return Index(child.data, merged_indices) if merged_indices else child.data
 
-def shrink(index:Index, expand:Expand) -> Index:
+def lower_index_expand(index:Index, expand:Expand) -> Index:
   if expand.node.shape == (): return expand.node
   return Index(expand.node, tuple(0 if s == 1 else i for s, i in zip(expand.node.shape, index.indices[len(expand.shape)-len(expand.node.shape):])))
 
@@ -80,7 +80,7 @@ index_collapse_rewrite = PatternMatcher([
     # Propagate indexing down the graph
     (Pat(Index, name="index", sources=Pat((BinaryOp, Store)), fuzzy_source_match=True), propagate_index),
     (Pat(Index, name="parent", sources=Pat(Index, name="child"), fuzzy_source_match=True), merge_index),
-    (Pat(Index, name="index", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), shrink),
+    (Pat(Index, name="index", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), lower_index_expand),
     (Pat(Index, name="index", sources=Pat(Reshape, name="reshape"), fuzzy_source_match=True), lower_index_reshape),
     (Pat(Index, name="index", sources=Pat(Permute, name="permute"), fuzzy_source_match=True), lower_index_permute),
     (Pat(Index, name="index", sources=Pat(Flip, name="flip"), fuzzy_source_match=True), lower_index_flip),

@@ -4,7 +4,9 @@ from typing import Callable
 import operator
 
 python_alu: dict[str, Callable]  = {
-  "+":operator.add, "-":operator.sub, "*":operator.mul, "/":operator.truediv, "%":operator.mod, "max":max}
+  Ops.ADD:operator.add, Ops.SUB:operator.sub, Ops.MUL:operator.mul, Ops.DIV:operator.truediv,
+  Ops.SHL:operator.lshift, Ops.SHL:operator.rshift, Ops.MOD:operator.mod, Ops.MAX:max,
+  Ops.CMPLT:operator.lt, Ops.CMPNE:operator.lshift}
 
 def execute_alu(op:str, operands):
   if op == '/' and all(isinstance(o, int) for o in operands): return Const(operands[0] // operands[1])

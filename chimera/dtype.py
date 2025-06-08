@@ -12,8 +12,9 @@ class DType:
   def new(itemsize:int, name:str, fmt:Optional[FmtStr]): return DType(itemsize, name, fmt)
 
 class dtypes:
-  int32 = DType(4, 'int', 'i')
-  float32 = DType(4, 'float', 'f')
+  int = DType(4, 'int', 'i')
+  float = DType(4, 'float', 'f')
+  bool = DType(1, 'bool', 'b')
   void = DType(0, 'void', None)
 
-  python_to_dtype = {int:int32, float:float32}
+  def get_dtype(value) -> DType: return getattr(dtypes, type(value).__name__.lower())

@@ -2,7 +2,14 @@ from __future__ import annotations
 from chimera.dtype import DType, dtypes
 from chimera.helpers import LOG_SHAPES, fully_flatten, get_shape, all_same, listed, tupled
 from dataclasses import dataclass
+from enum import auto, IntEnum, Enum
 import weakref, functools
+
+class Ops(IntEnum):
+  ADD = auto(); SUB = auto(); MUL = auto(); DIV = auto(); MOD = auto(); MAX = auto()
+  SHL = auto(); SHR = auto()
+  CMPLT = auto(); CMPNE = auto()
+  def __str__(self): return Enum.__str__(self)
 
 class NodeMetaClass(type):
   node_cache:dict[tuple, weakref.ReferenceType[Node]] = {}
@@ -88,24 +95,43 @@ class Node(metaclass=NodeMetaClass):
       stride *= simp
     return tuple(reversed(strides))
 
-  def __repr__(self): return self.__class__.__name__
-  def __add__(self, x): return BinaryOp('+', self, Node.to_node(x))
-  def __sub__(self, x): return BinaryOp('-', self, Node.to_node(x))
-  def __mul__(self, x): return BinaryOp('*', self, Node.to_node(x))
-  def __mod__(self, x): return BinaryOp('%', self, Node.to_node(x))
-  def __truediv__(self, x): return BinaryOp('/', self, Node.to_node(x))
-  def __neg__(self): return self * (-1)
-  # def __getitem__(self, key): return Index(self, key)
+  def logical_not(self): return self.ne(True)
+  def _binop(self, op, x, reverse=False): return BinaryOp(op, Node.to_node(x), self) if reverse else BinaryOp(op, self, Node.to_node(x))
 
+  def __repr__(self): return self.__class__.__name__
+  def __add__(self, x): return self._binop(Ops.ADD, x)
+  def __sub__(self, x): return self._binop(Ops.SUB, x)
+  def __mul__(self, x): return self._binop(Ops.MUL, x)
+  def __mod__(self, x): return self._binop(Ops.MOD, x)
+  def __truediv__(self, x): return self._binop(Ops.DIV, x)
+  def __lshift__(self, x): return self._binop(Ops.SHL, x)
+  def __rshift__(self, x): return self._binop(Ops.SHR, x)
+
+  def __radd__(self, x): return self._binop(Ops.ADD, x, True)
+  def __rsub__(self, x): return self._binop(Ops.SUB, x, True)
+  def __rmul__(self, x): return self._binop(Ops.MUL, x, True)
+  def __rmod__(self, x): return self._binop(Ops.MOD, x, True)
+  def __rtruediv__(self, x): return self._binop(Ops.DIV, x, True)
+  def __rlshift__(self, x): return self._binop(Ops.SHL, x, True)
+  def __rrshift__(self, x): return self._binop(Ops.SHR, x, True)
+
+  def __lt__(self, x): return self._binop(Ops.CMPLT, x)
+  def __gt__(self, x): return self._binop(Ops.CMPLT, x, True)
+  def __ge__(self, x): return (self < x).logical_not()
+  def __le__(self, x): return (self > x).logical_not()
+  
+  def ne(self, x): return self._binop(Ops.CMPNE, x)
+  def eq(self, x): return self.ne(x).logical_not()
+  
 class Program(Node):
   def __init__(self, nodes:list[Node]|Node):
     self._sources = tupled(nodes)
 
 class Const(Node):
   def __init__(self, value):
-    assert isinstance(value, (int, float)), f"Const node can only have values of type int, float. Type was {type(value)}. {value}"
+    assert isinstance(value, (int, float, bool)), f"Const node can only have values of type int, float, bool. Type was {type(value)}. {value}"
     self._arg = value
-    self._dtype = dtypes.python_to_dtype[type(self.value)]
+    self._dtype = dtypes.get_dtype(value)
   @property
   def value(self): return self._arg
   def __repr__(self): return f"Const {self.value}"
@@ -161,7 +187,7 @@ class Array(Node):
     self._shape = tuple(map(self.to_node, get_shape(data)))
     self._arg = tuple(fully_flatten(data))
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
-    self._dtype = dtypes.python_to_dtype[type(self.data[0])]
+    self._dtype = dtypes.get_dtype(self.data[0])
   @property
   def data(self) -> tuple: return self._arg
 
@@ -186,7 +212,7 @@ class Index(Node):
     assert data.shape != (), f"Cannot index node with no shape {data}"
     assert len(indices) > 0, f"Cannot index {data} with no indices"
     for i in indices:
-      assert isinstance(i, (int, Slice)) or (isinstance(i, (Const, Var, BinaryOp)) and i.dtype is dtypes.int32), f"Expected indices to be int, Const, Var, Slice or list thereof but got {indices}"
+      assert isinstance(i, (int, Slice)) or (isinstance(i, (Const, Var, BinaryOp)) and i.dtype is dtypes.int), f"Expected indices to be int, Const, Var, Slice or list thereof but got {indices}"
     indices = tuple(map(Node.to_node, indices))
     self._sources = (data, *indices)
     shape = []
@@ -228,13 +254,13 @@ class Loop(Node):
   def scope(self) -> Node: return self.sources[2]
 
 class BinaryOp(Node):
-  def __init__(self, op, left:Node, right:Node):
+  def __init__(self, op:Ops, left:Node, right:Node):
     self._sources = (left, right)
     self._arg = op
     left, right, shape = self._broadcast_sources(left, right)
     self._sources = (left, right)
     self._shape = shape
-    self._dtype = self.left.dtype # TODO resolve better
+    self._dtype = dtypes.bool if op in {Ops.CMPLT, Ops.CMPNE} else right.dtype
   @property
   def op(self): return self._arg
   @property
@@ -250,7 +276,7 @@ class BinaryOp(Node):
     target_shape = []
     for l, r in zip(left_shape, right_shape):
       # assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
-      target_shape.append(BinaryOp('max', l, r).simplify())
+      target_shape.append(BinaryOp(Ops.MAX, l, r).simplify())
     target_shape = tuple(target_shape)
     if left_shape != target_shape: left = Expand(left, target_shape)
     if right_shape != target_shape: right = Expand(right, target_shape)
@@ -307,6 +333,17 @@ class Flip(Node):
   def node(self) -> Node: return self.sources[0]
   @property
   def dims(self) -> tuple[int]: return self._arg
+
+class Branch(Node):
+  def __init__(self, condition:Node, passed:Node, failed:Node|None):
+    assert condition.dtype == dtypes.bool, f"Condition has to be a bool\nCondition:\n{condition.get_print_tree()}"
+    self._sources = (condition, passed, failed)
+  @property
+  def condition(self) -> Node: return self.sources[0]
+  @property
+  def passed(self) -> Node: return self.sources[1]
+  @property
+  def failed(self) -> Node: return self.sources[2]
 
 class Debug(Node):
   def __init__(self, data:Node):

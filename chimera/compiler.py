@@ -7,7 +7,7 @@ def compile(code, functions):
   libs = f'{lib}\n\n{functions}\n\n'
   main = f"int main(int argc, char *argv[]) {{\n{code}\n}}"
   if DEBUG:
-    print(f"\n{code}")
+    print(f"\n{code}\n")
     clang_timer = time.perf_counter()
 
   with tempfile.NamedTemporaryFile(delete=False, suffix='.exe') as exe_file:
