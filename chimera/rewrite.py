@@ -80,11 +80,11 @@ class PatternMatcher:
 ### Graph Rewrite ###
 
 class RewriteContext:
-  def __init__(self):
+  def __init__(self, track_rewrites=TRACK_REWRITES):
     self.pre:dict[Node, Node] = {}
     self.post:dict[Node, Node] = {}
     self.position:tuple[int] = ()
-    self.tracker:TrackedRewrite|None = TrackedRewrite() if TRACK_REWRITES else None
+    self.tracker:TrackedRewrite|None = TrackedRewrite() if track_rewrites else None
 
 class TrackedRewrite:
   def __init__(self):
@@ -115,7 +115,7 @@ def recurse_rewrite_graph(n:Node, rewriter:PatternMatcher, ctx:RewriteContext, p
   replace[n] = ret = last_n if new_src == last_n.sources else recurse_rewrite_graph(last_n.copy(new_src), rewriter, ctx, position, replace)
   return ret
 
-def rewrite_graph(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None) -> Node:  
+def rewrite_graph(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None, track_rewrites:bool=TRACK_REWRITES) -> Node:  
   @functools.cache
   def _get_graph(tracker:TrackedRewrite, root:Node, i:int) -> Node:
     if i <= -1: return root
@@ -135,9 +135,9 @@ def rewrite_graph(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None) 
     pattern = f"{tracker.get_pattern(i)}\n" if i >= 0 else ""
     return f"{pattern}{_get_graph(tracker, root, i).get_print_tree(set(), [], lambda x: format(x, linearize(_get_graph(tracker, root, i-1))))}"
 
-  if ctx is None: ctx = RewriteContext()
+  if ctx is None: ctx = RewriteContext(track_rewrites)
   rewrite = recurse_rewrite_graph(graph, rewriter, ctx)
-  if TRACK_REWRITES: navigate_history(lambda i: _get_history_entry(ctx.tracker, graph, i-1), len(ctx.tracker) + 1)
+  if track_rewrites: navigate_history(lambda i: _get_history_entry(ctx.tracker, graph, i-1), len(ctx.tracker) + 1)
   return rewrite
 
 def print_procedure(nodes:list[Node]):

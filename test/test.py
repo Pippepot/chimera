@@ -37,6 +37,9 @@ class Test(unittest.TestCase):
   def test_permute(self): 
     self.assert_program(Permute(Array([[[1,2,3], [4,5,6]], [[7,8,9], [10,11,12]]]), (2, 0, 1)), '[[[1, 4], [7, 10]], [[2, 5], [8, 11]], [[3, 6], [9, 12]]]')
   
+  def test_flip(self):
+    self.assert_program(Flip(Array([[1,2,3],[4,5,6]]) * 5, (0,1)), '[[30, 25, 20], [15, 10, 5]]')
+
   def assert_program(self, ast, truth):
     strip_ws = lambda s: re.sub(r"\s+", "", s)
     return self.assertEqual(strip_ws(compiler.compile(*renderer.render(parse_ast(Debug(ast))))), strip_ws(truth))

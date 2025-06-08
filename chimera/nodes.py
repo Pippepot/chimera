@@ -71,7 +71,7 @@ class Node(metaclass=NodeMetaClass):
     if isinstance(self, Const): return self
     from chimera.symbolic import symbolic
     from chimera.rewrite import rewrite_graph
-    return rewrite_graph(self, symbolic)
+    return rewrite_graph(self, symbolic, track_rewrites=False)
 
   @staticmethod
   def to_node(x): return x if isinstance(x, Node) else Const(x)
@@ -250,7 +250,6 @@ class BinaryOp(Node):
     target_shape = []
     for l, r in zip(left_shape, right_shape):
       # assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
-      # TODO record constraint, simplify
       target_shape.append(BinaryOp('max', l, r).simplify())
     target_shape = tuple(target_shape)
     if left_shape != target_shape: left = Expand(left, target_shape)
@@ -278,20 +277,36 @@ class Reshape(Node):
   def node(self) -> Node: return self.sources[0]
 
 class Permute(Node):
-  def __init__(self, node:Node, axes:tuple[int, ...]):
-    axes = tupled(axes)
-    assert len(node.shape) == len(axes), f"Shape of {node}, {node.shape} does not have the same length as axes {axes}"
-    assert all(i == a for i,a in enumerate(sorted(axes))), f"Invalid axes {axes} for shape {node.shape}"
+  def __init__(self, node:Node, dims:tuple[int, ...]):
+    dims = tupled(dims)
+    assert len(node.shape) == len(dims), f"Shape of {node}, {node.shape} does not have the same length as dims {dims}"
+    assert all(i == a for i,a in enumerate(sorted(dims))), f"Invalid dims {dims} for shape {node.shape}"
     self._sources = (node,)
-    self._shape = tuple(node.shape[i] for i in axes)
-    self._dtype = self.node.dtype
-    inv = [0] * len(axes)
-    for d, pd in enumerate(axes): inv[pd] = d
+    self._shape = tuple(node.shape[i] for i in dims)
+    self._dtype = node.dtype
+    inv = [0] * len(dims)
+    for d, pd in enumerate(dims): inv[pd] = d
     self._arg = tuple(inv)
   @property
   def node(self) -> Node: return self.sources[0]
   @property
   def inverse_permutation(self) -> tuple[int]: return self._arg
+
+class Flip(Node):
+  def __init__(self, node:Node, dims:tuple[int, ...]):
+    dims = tupled(dims)
+    assert len(dims) > 0, f"Dims cannot be empty"
+    assert len(dims) == len(set(dims)), f"Dims {dims} need to be unique"
+    assert len(dims) <= len(node.shape), f"Too many dims for shape {node.shape}. Dims: {dims}"
+    assert all(isinstance(d, int) for d in dims), f"Dims need to be all ints. Dims {dims}"
+    self._sources = (node,)
+    self._shape = node.shape
+    self._dtype = node.dtype 
+    self._arg = dims
+  @property
+  def node(self) -> Node: return self.sources[0]
+  @property
+  def dims(self) -> tuple[int]: return self._arg
 
 class Debug(Node):
   def __init__(self, data:Node):
