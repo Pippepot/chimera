@@ -14,7 +14,7 @@ class DType:
 class dtypes:
   int = DType(4, 'int', 'i')
   float = DType(4, 'float', 'f')
-  bool = DType(1, 'bool', 'b')
+  bool = DType(1, 'char', 'b')
   void = DType(0, 'void', None)
 
   def get_dtype(value) -> DType: return getattr(dtypes, type(value).__name__.lower())

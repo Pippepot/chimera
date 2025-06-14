@@ -5,12 +5,15 @@ from chimera.dtype import dtypes
 from chimera.helpers import TRACK_REWRITES, navigate_history
 
 op_rendering: dict = {
+  Ops.SQRT: lambda x: f"sqrt({x})", Ops.EXP2: lambda x: f"exp2({x})",
+  Ops.LOG2: lambda x: f"log2({x})", Ops.SIN: lambda x: f"sin({x})",
   Ops.ADD: lambda a,b: f"({a}+{b})", Ops.SUB: lambda a,b: f"({a}-{b})",
   Ops.MUL: lambda a,b: f"({a}*{b})", Ops.DIV: lambda a,b: f"({a}/{b})",
   Ops.SHL: lambda a,b: f"({a}<<{b})", Ops.SHR: lambda a,b: f"({a}>>{b})",
-  Ops.MOD: lambda a,b: f"({a}%{b})",
-  Ops.MAX: lambda a,b: f"({a}>{b}?{a}:{b})",
+  Ops.MOD: lambda a,b: f"({a}%{b})", Ops.MAX: lambda a,b: f"({a}>{b}?{a}:{b})",
+  Ops.AND: lambda a,b: f"({a}&{b})", Ops.OR: lambda a,b: f"({a}|{b})", Ops.XOR: lambda a,b: f"({a}^{b})",
   Ops.CMPLT: lambda a,b: f"({a}<{b})", Ops.CMPNE: lambda a,b: f"({a}!={b})",
+  Ops.POW: lambda a,b: f"pow({a}, {b})",
 }
 
 class NodeGroup:
@@ -20,7 +23,7 @@ class NodeGroup:
 class TypeGroup:
   Number = {dtypes.int, dtypes.int}
 
-dtype_to_str = {dtypes.int:'int', dtypes.float:'float', dtypes.bool:'bool', None:'void'}
+dtype_to_str = {dtypes.int:'int', dtypes.float:'float', dtypes.bool:'char', None:'void'}
 
 def render_assign(ctx, x:Assign):
   # C initializes arrays and pointers with different syntax
@@ -34,7 +37,7 @@ def append_indent(string:str) -> str: return "\n".join(f"  {line}" for line in s
 def strip_parens(string:str) -> str: return string[1:-1]
 
 render_patterns = PatternMatcher([
-  (Pat(Const, name='x'), lambda x: f"{str(x.value).lower()}{dtype_suffix(x.dtype)}"),
+  (Pat(Const, name='x'), lambda x: f"{x.value}{dtype_suffix(x.dtype)}"),
   (Pat(Array, name='x'), lambda x: render_array(x.data, dtype_suffix(x.dtype))),
   (Pat(Var, name='x'), lambda ctx, x: f'{x.name}{ctx[x.name]}'),
   (Pat(Assign, name='x'), render_assign),
@@ -42,6 +45,7 @@ render_patterns = PatternMatcher([
   (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({ctx[x.size]})"),
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]});"),
   (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n{append_indent(ctx[x.scope])}\n}}"),
+  (Pat(Where, name='x'), lambda ctx, x: f"({ctx[x.condition]}?{ctx[x.passed]}:{ctx[x.failed]})"),
   (Pat(Branch, name='x'), lambda ctx, x: f"if ({ctx[x.condition]}) {{\n{append_indent(ctx[x.passed])}\n}}" + ("" if x.failed == None else f"\nelse {{\n{append_indent(ctx[x.failed])}\n}}")),
   (Pat(Reshape, name='x'), lambda ctx, x: ctx[x.node]),
   (Pat(Load, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),

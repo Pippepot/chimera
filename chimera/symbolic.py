@@ -1,15 +1,27 @@
 from chimera.graph import PatternMatcher, Pat
 from chimera.nodes import *
 from typing import Callable
-import operator
+import operator, math
+
+def cdiv(x:int, y:int) -> int: return abs(x)//abs(y)*(1,-1)[x*y<0] if y != 0 else 0
+def cmod(x:int, y:int) -> int: return x-cdiv(x,y)*y
+def safe_exp2(x):
+  try: return 2 ** x
+  except OverflowError: return math.inf
+def safe_pow(x, y):
+  try: return math.nan if isinstance(p:=pow(x, y), complex) else p
+  except ZeroDivisionError: return math.inf
+  except ValueError: return math.inf if x > 0 else -math.inf
 
 python_alu: dict[str, Callable]  = {
-  Ops.ADD:operator.add, Ops.SUB:operator.sub, Ops.MUL:operator.mul, Ops.DIV:operator.truediv,
-  Ops.SHL:operator.lshift, Ops.SHL:operator.rshift, Ops.MOD:operator.mod, Ops.MAX:max,
+  Ops.LOG2: lambda x: math.log2(x) if x > 0 else -math.inf if x == 0 else math.nan, Ops.EXP2: safe_exp2,
+  Ops.SQRT: lambda x: math.sqrt(x) if x >= 0 else math.nan, Ops.SIN: lambda x: math.sin(x) if not math.isinf(x) else math.nan,
+  Ops.ADD:operator.add, Ops.SUB:operator.sub, Ops.MUL:operator.mul, Ops.DIV:cdiv, Ops.POW: safe_pow,
+  Ops.SHL:operator.lshift, Ops.SHR:operator.rshift, Ops.MOD:cmod, Ops.MAX:max,
+  Ops.AND:operator.and_, Ops.OR:operator.or_, Ops.XOR:operator.xor,
   Ops.CMPLT:operator.lt, Ops.CMPNE:operator.lshift}
 
 def execute_alu(op:str, operands):
-  if op == '/' and all(isinstance(o, int) for o in operands): return Const(operands[0] // operands[1])
   return Const(python_alu[op](*operands))
 
 symbolic = PatternMatcher([

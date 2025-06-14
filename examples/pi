@@ -1,0 +1,9 @@
+# Monte-Carlo π estimator
+samples  = 10_000_000
+
+π_estimate =
+  0..samples
+  |> map _ -> [rand(), rand()]           # N × 2 array of points in [0,1]²
+  |> map x, y -> (x*x + y*y < 1 ? 1 : 0) # 1 if inside unit quarter-circle 
+  |> sum                                 # how many hits
+  |> mul 4 / samples                     # area ratio → π

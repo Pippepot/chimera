@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
+#include <math.h>
 
 typedef void (*fmt_func_t)(char* buf, size_t buf_size, const void* elem);
 
@@ -12,7 +12,7 @@ void f_fmt(char* buf, size_t buf_size, const void* elem) {
     sprintf(buf, "%f", *((const float*)elem));
 }
 void b_fmt(char* buf, size_t buf_size, const void* elem) {
-    sprintf(buf, "%s", (*((const bool*)elem)) == 1 ? "true" : "false");
+    sprintf(buf, "%s", (*((const char*)elem)) == 1 ? "true" : "false");
 }
 static void indent(char *buf, size_t *pos, size_t n) {
     memset(buf + *pos, ' ', n);

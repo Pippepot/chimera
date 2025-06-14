@@ -41,11 +41,11 @@ class Pat():
     return f"Pat({types}{data_types}{name}){sources}"
 
   def _binop(self, op:str, x): return Pat(BinaryOp, predicate=lambda x: x.op==op, sources=(self, Pat.to_pat(x)))
-  def __add__(self, x): return self._binop('+', x)
-  def __sub__(self, x): return self._binop('-', x)
-  def __mul__(self, x): return self._binop('*', x)
-  def __mod__(self, x): return self._binop('%', x)
-  def __truediv__(self, x): return self._binop('/', x)
+  def __add__(self, x): return self._binop(Ops.ADD, x)
+  def __sub__(self, x): return self._binop(Ops.SUB, x)
+  def __mul__(self, x): return self._binop(Ops.MUL, x)
+  def __mod__(self, x): return self._binop(Ops.MOD, x)
+  def __truediv__(self, x): return self._binop(Ops.DIV, x)
 
   @staticmethod
   @functools.cache
@@ -92,30 +92,13 @@ class TrackedRewrite:
   def get_pattern(self, step:int): return self._tracker[step][0]
   def get_rewritten(self, step:int): return self._tracker[step][1]
   def get_position(self, step:int): return self._tracker[step][2]
-  def track_step(self, pattern:Pat, rewritten:Node, position:tuple[int], step:int=None):
-    self._tracker.insert(len(self) if step is None else step, (pattern, rewritten, position))
+  def track_step(self, pattern:Pat, rewritten:Node, position:tuple[int]):
+    self._tracker.insert(len(self), (pattern, rewritten, position))
   def __len__(self): return len(self._tracker)
 
-def recurse_rewrite_graph(n:Node, rewriter:PatternMatcher, ctx:RewriteContext, position:tuple[int]=None, replace:dict[Node, Node]=None) -> Node:
-  assert isinstance(n, Node), f"Expected Node, got {n}"
-  if replace is None: replace = {}
-  elif (rn := replace.get(n)) is not None:
-    return rn
-  if position is None: position = ctx.position
-  else: ctx.position = position
-  new_n:Node = n; last_n:Node = None
-  while new_n is not None:
-    if ctx.tracker is not None: tracker_step = len(ctx.tracker)
-    last_n, new_n, pattern = new_n, *rewriter.rewrite(new_n, ctx)
-    if new_n == last_n: break
-    if ctx.tracker is not None and new_n is not None:
-      ctx.tracker.track_step(pattern, new_n, position, tracker_step)
-  assert isinstance(last_n, Node), f"Rewriter has to return a {Node.__name__} but returned {last_n} from {n}.\nLast pattern: {pattern}"
-  new_src = tuple(recurse_rewrite_graph(node, rewriter, ctx, position + (i,), replace) for i,node in enumerate(last_n.sources))
-  replace[n] = ret = last_n if new_src == last_n.sources else recurse_rewrite_graph(last_n.copy(new_src), rewriter, ctx, position, replace)
-  return ret
+replacers:dict[PatternMatcher, dict[Node, Node]] = {}
 
-def rewrite_graph(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None, track_rewrites:bool=TRACK_REWRITES) -> Node:  
+def rewrite_tree(root:Node, rewriter:PatternMatcher, ctx:RewriteContext=None, track_rewrites:bool=TRACK_REWRITES):
   @functools.cache
   def _get_graph(tracker:TrackedRewrite, root:Node, i:int) -> Node:
     if i <= -1: return root
@@ -136,9 +119,33 @@ def rewrite_graph(graph:Node, rewriter:PatternMatcher, ctx:RewriteContext=None, 
     return f"{pattern}{_get_graph(tracker, root, i).get_print_tree(set(), [], lambda x: format(x, linearize(_get_graph(tracker, root, i-1))))}"
 
   if ctx is None: ctx = RewriteContext(track_rewrites)
-  rewrite = recurse_rewrite_graph(graph, rewriter, ctx)
-  if track_rewrites: navigate_history(lambda i: _get_history_entry(ctx.tracker, graph, i-1), len(ctx.tracker) + 1)
-  return rewrite
+
+  if not (replace:=replacers.get(rewriter, {})): replacers[rewriter] = replace
+  stack: list[tuple[Node, int, Node, tuple[int]]] = [(root, 0, root, ())]
+  while stack:
+    n, stage, new_n, position = stack.pop()
+    if n in replace: continue
+    if stage == 0:
+      while new_n is not None:
+        last_n, new_n, pattern = new_n, *rewriter.rewrite(new_n, ctx)
+        if new_n == last_n: break
+        if ctx.tracker is not None and new_n is not None:
+          ctx.tracker.track_step(pattern, new_n, position)
+      new_n = last_n
+      stack.append((n, 1, new_n, position))
+      for i, x in enumerate(reversed(new_n.sources)): stack.append((x, 0, x, position + (i,)))
+    elif stage == 1:
+      if (new_sources:=tuple([replace[x] for x in new_n.sources])) == new_n.sources:
+        replace[n] = new_n
+        continue
+      new_sources_n = new_n.copy(new_sources)
+      stack.append((n, 2, new_sources_n, position))
+      stack.append((new_sources_n, 0, new_sources_n, position))
+    else:
+      replace[n] = replace[new_n]
+
+  if track_rewrites: navigate_history(lambda i: _get_history_entry(ctx.tracker, root, i-1), len(ctx.tracker) + 1)
+  return replace[root]
 
 def print_procedure(nodes:list[Node]):
   for i,n in enumerate(nodes):

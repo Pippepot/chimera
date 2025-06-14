@@ -1,5 +1,5 @@
 from __future__ import annotations
-from chimera.rewrite import PatternMatcher, Pat, RewriteContext, rewrite_graph, linearize
+from chimera.rewrite import PatternMatcher, Pat, RewriteContext, rewrite_tree, linearize
 from chimera.helpers import DEBUG, prod
 from chimera.nodes import *
 
@@ -73,7 +73,7 @@ base_rewrite = PatternMatcher([
   # Refactor print statements to use malloc/free
   (Pat(Debug, predicate=lambda x: x.data.shape != (), name="x"), refactor_debug),
   # Move array to assignments
-  (Pat((BinaryOp, Expand, Reshape, Permute, Flip, Store, Index), name="parent"), assign_array),
+  (Pat((BinaryOp, Expand, Reshape, Permute, Flip, Where, Store, Index), name="parent"), assign_array),
 ])
 
 index_collapse_rewrite = PatternMatcher([
@@ -89,11 +89,11 @@ index_collapse_rewrite = PatternMatcher([
 
 def apply_rewrite_passes(graph:Node) -> Node:
   # Base rewrite
-  graph = rewrite_graph(graph, base_rewrite, (context:=RewriteContext()))
+  graph = rewrite_tree(graph, base_rewrite, (context:=RewriteContext()))
   graph = Program(tuple(context.pre.values()) + graph.sources + tuple(context.post.values()))
 
   # Index collapse rewrite
-  graph = rewrite_graph(graph, index_collapse_rewrite)
+  graph = rewrite_tree(graph, index_collapse_rewrite)
 
   # Symbolic rewrite
   graph = graph.simplify()

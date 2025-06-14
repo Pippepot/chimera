@@ -6,8 +6,11 @@ from enum import auto, IntEnum, Enum
 import weakref, functools
 
 class Ops(IntEnum):
+  # Unary ops
+  SQRT = auto(); LOG2 = auto(); EXP2 = auto(); SIN = auto()
+  # Binary ops
   ADD = auto(); SUB = auto(); MUL = auto(); DIV = auto(); MOD = auto(); MAX = auto()
-  SHL = auto(); SHR = auto()
+  SHL = auto(); SHR = auto(); AND = auto(); OR = auto(); XOR = auto(); POW = auto()
   CMPLT = auto(); CMPNE = auto()
   def __str__(self): return Enum.__str__(self)
 
@@ -77,8 +80,8 @@ class Node(metaclass=NodeMetaClass):
   def simplify(self):
     if isinstance(self, Const): return self
     from chimera.symbolic import symbolic
-    from chimera.rewrite import rewrite_graph
-    return rewrite_graph(self, symbolic, track_rewrites=False)
+    from chimera.rewrite import rewrite_tree
+    return rewrite_tree(self, symbolic, track_rewrites=False)
 
   @staticmethod
   def to_node(x): return x if isinstance(x, Node) else Const(x)
@@ -96,8 +99,11 @@ class Node(metaclass=NodeMetaClass):
     return tuple(reversed(strides))
 
   def logical_not(self): return self.ne(True)
-  def _binop(self, op, x, reverse=False): return BinaryOp(op, Node.to_node(x), self) if reverse else BinaryOp(op, self, Node.to_node(x))
-
+  def _binop(self, op, x, reverse=False):
+    a, b = self, Node.to_node(x)
+    a, b = broadcast(b, a) if reverse else broadcast(a, b)
+    return BinaryOp(op, a, b)
+  
   def __repr__(self): return self.__class__.__name__
   def __add__(self, x): return self._binop(Ops.ADD, x)
   def __sub__(self, x): return self._binop(Ops.SUB, x)
@@ -106,6 +112,10 @@ class Node(metaclass=NodeMetaClass):
   def __truediv__(self, x): return self._binop(Ops.DIV, x)
   def __lshift__(self, x): return self._binop(Ops.SHL, x)
   def __rshift__(self, x): return self._binop(Ops.SHR, x)
+  def __pow__(self, x): return self._binop(Ops.POW, x)
+  def __and__(self, x): return self._binop(Ops.AND, x)
+  def __or__(self, x): return self._binop(Ops.OR, x)
+  def __xor__(self, x): return self._binop(Ops.XOR, x)
 
   def __radd__(self, x): return self._binop(Ops.ADD, x, True)
   def __rsub__(self, x): return self._binop(Ops.SUB, x, True)
@@ -114,15 +124,27 @@ class Node(metaclass=NodeMetaClass):
   def __rtruediv__(self, x): return self._binop(Ops.DIV, x, True)
   def __rlshift__(self, x): return self._binop(Ops.SHL, x, True)
   def __rrshift__(self, x): return self._binop(Ops.SHR, x, True)
+  def __rpow__(self, x): return self._binop(Ops.POW, x, True)
+  def __rand__(self, x): return self._binop(Ops.AND, x, True)
+  def __ror__(self, x): return self._binop(Ops.OR, x, True)
+  def __rxor__(self, x): return self._binop(Ops.XOR, x, True)
 
   def __lt__(self, x): return self._binop(Ops.CMPLT, x)
   def __gt__(self, x): return self._binop(Ops.CMPLT, x, True)
   def __ge__(self, x): return (self < x).logical_not()
   def __le__(self, x): return (self > x).logical_not()
   
+  def __neg__(self): return self*(-1)
+
   def ne(self, x): return self._binop(Ops.CMPNE, x)
   def eq(self, x): return self.ne(x).logical_not()
-  
+  # def sqrt(self): return self.alu(Ops.SQRT)
+  # def sin(self): return self.alu(Ops.SIN)
+  # def log2(self): return self.alu(Ops.LOG2)
+  # def exp2(self): return self.alu(Ops.EXP2)
+  def pow(self, x): return self._binop(Ops.POW, x)
+  def where(self, passed, failed): return Where(self, Node.to_node(passed), Node.to_node(failed))
+
 class Program(Node):
   def __init__(self, nodes:list[Node]|Node):
     self._sources = tupled(nodes)
@@ -130,7 +152,7 @@ class Program(Node):
 class Const(Node):
   def __init__(self, value):
     assert isinstance(value, (int, float, bool)), f"Const node can only have values of type int, float, bool. Type was {type(value)}. {value}"
-    self._arg = value
+    self._arg = int(value) if isinstance(value, bool) else value
     self._dtype = dtypes.get_dtype(value)
   @property
   def value(self): return self._arg
@@ -255,11 +277,10 @@ class Loop(Node):
 
 class BinaryOp(Node):
   def __init__(self, op:Ops, left:Node, right:Node):
-    self._sources = (left, right)
+    assert left.shape == right.shape, f"Left and right operands need to have same shape\nLeft {left}: {left.shape}\nRight {right}: {right.shape}"
     self._arg = op
-    left, right, shape = self._broadcast_sources(left, right)
     self._sources = (left, right)
-    self._shape = shape
+    self._shape = right.shape
     self._dtype = dtypes.bool if op in {Ops.CMPLT, Ops.CMPNE} else right.dtype
   @property
   def op(self): return self._arg
@@ -267,26 +288,12 @@ class BinaryOp(Node):
   def left(self): return self.sources[0]
   @property
   def right(self): return self.sources[1]
-  def _broadcast_sources(self, left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
-    if not left.shape and not right.shape: return left, right, ()
-    left_shape, right_shape = left.shape, right.shape
-    ls, rs = len(left.shape), len(right.shape)
-    if ls < rs: left_shape = (Const(1),)*(rs-ls) + left_shape
-    if rs < ls: right_shape = (Const(1),)*(ls-rs) + right_shape
-    target_shape = []
-    for l, r in zip(left_shape, right_shape):
-      # assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
-      target_shape.append(BinaryOp(Ops.MAX, l, r).simplify())
-    target_shape = tuple(target_shape)
-    if left_shape != target_shape: left = Expand(left, target_shape)
-    if right_shape != target_shape: right = Expand(right, target_shape)
-    return left, right, target_shape
   def __repr__(self): return f"{super().__repr__()} {self.op}"
 
 class Expand(Node):
   def __init__(self, node:Node, shape:tuple[int, ...]):
     assert len(node.shape) <= len(shape), f"Expand has to have same or more dimensions as the source node\nSource shape: {node.shape}\nExpand shape: {shape}"
-    assert all(s1 == 1 or s1 == s2 for s1, s2 in zip(node.shape, shape[len(shape) - len(node.shape):])),\
+    assert all(s1 == Const(1) or s1 == s2 for s1, s2 in zip(node.shape, shape[len(shape) - len(node.shape):])),\
     f"Expanded shape is invalid for source shape\nSource shape: {' '*(len(str(shape))-len(str(node.shape)))}{node.shape}\nExpand shape: {shape}"
     self._sources = (node,)
     self._shape = shape
@@ -334,6 +341,18 @@ class Flip(Node):
   @property
   def dims(self) -> tuple[int]: return self._arg
 
+class Where(Node):
+  def __init__(self, condition:Node, passed:Node, failed:Node):
+    assert condition.dtype == dtypes.bool, f"Condition has to be a bool\nCondition:\n{condition.get_print_tree()}"
+    self._sources = (condition, passed, failed)
+    self.shape
+  @property
+  def condition(self) -> Node: return self.sources[0]
+  @property
+  def passed(self) -> Node: return self.sources[1]
+  @property
+  def failed(self) -> Node: return self.sources[2]
+
 class Branch(Node):
   def __init__(self, condition:Node, passed:Node, failed:Node|None):
     assert condition.dtype == dtypes.bool, f"Condition has to be a bool\nCondition:\n{condition.get_print_tree()}"
@@ -352,3 +371,18 @@ class Debug(Node):
     self._dtype = data.dtype
   @property
   def data(self): return self.sources[0]
+
+def broadcast(left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
+  left_shape, right_shape = left.shape, right.shape
+  if left_shape == right_shape: return left, right
+  ls, rs = len(left.shape), len(right.shape)
+  if ls < rs: left_shape = (Const(1),)*(rs-ls) + left_shape
+  if rs < ls: right_shape = (Const(1),)*(ls-rs) + right_shape
+  target_shape = []
+  for l, r in zip(left_shape, right_shape):
+    # assert l == r or l == 1 or r == 1, f"Cannot broadcast shapes {left.shape}, {right.shape}"
+    target_shape.append(BinaryOp(Ops.MAX, l, r).simplify())
+  target_shape = tuple(target_shape)
+  if left_shape != target_shape: left = Expand(left, target_shape)
+  if right_shape != target_shape: right = Expand(right, target_shape)
+  return left, right
