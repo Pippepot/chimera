@@ -40,6 +40,9 @@ class Test(unittest.TestCase):
   def test_flip(self):
     self.assert_program(Flip(Array([[1,2,3],[4,5,6]]) * 5, (0,1)), '[[30, 25, 20], [15, 10, 5]]')
 
+  def test_where(self):
+    self.assert_program((Array([True, False, True])).where(Array([1,2,3]), Array([10])), '[1, 10, 3]')
+  
   def assert_program(self, ast, truth):
     strip_ws = lambda s: re.sub(r"\s+", "", s)
     return self.assertEqual(strip_ws(compiler.compile(*renderer.render(parse_ast(Debug(ast))))), strip_ws(truth))

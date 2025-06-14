@@ -100,8 +100,7 @@ class Node(metaclass=NodeMetaClass):
 
   def logical_not(self): return self.ne(True)
   def _binop(self, op, x, reverse=False):
-    a, b = self, Node.to_node(x)
-    a, b = broadcast(b, a) if reverse else broadcast(a, b)
+    a, b = broadcast(x, self) if reverse else broadcast(self, x)
     return BinaryOp(op, a, b)
   
   def __repr__(self): return self.__class__.__name__
@@ -143,7 +142,11 @@ class Node(metaclass=NodeMetaClass):
   # def log2(self): return self.alu(Ops.LOG2)
   # def exp2(self): return self.alu(Ops.EXP2)
   def pow(self, x): return self._binop(Ops.POW, x)
-  def where(self, passed, failed): return Where(self, Node.to_node(passed), Node.to_node(failed))
+  def where(self, passed, failed):
+    passed, failed = broadcast(passed, failed)
+    cond, passed = broadcast(self, passed)
+    cond, failed = broadcast(cond, failed)
+    return Where(cond, passed, failed)
 
 class Program(Node):
   def __init__(self, nodes:list[Node]|Node):
@@ -206,10 +209,11 @@ class Store(Node):
 
 class Array(Node):
   def __init__(self, data:list):
-    self._shape = tuple(map(self.to_node, get_shape(data)))
+    self._shape = tuple(map(Node.to_node, get_shape(data)))
     self._arg = tuple(fully_flatten(data))
     assert all_same([type(d) for d in data]), f"Array must contain only one type but got {data}"
     self._dtype = dtypes.get_dtype(self.data[0])
+    if self.dtype == dtypes.bool: self._arg = tuple(map(int, self._arg))
   @property
   def data(self) -> tuple: return self._arg
 
@@ -344,8 +348,11 @@ class Flip(Node):
 class Where(Node):
   def __init__(self, condition:Node, passed:Node, failed:Node):
     assert condition.dtype == dtypes.bool, f"Condition has to be a bool\nCondition:\n{condition.get_print_tree()}"
+    assert passed.shape == failed.shape, f"Expressions must be of same shape\nTrue: {passed.shape}\nFalse: {failed.shape}"
+    assert passed.dtype == failed.dtype, f"Expressions must be of same data type\nTrue: {passed.dtype}\nFalse: {failed.dtype}"
     self._sources = (condition, passed, failed)
-    self.shape
+    self._shape = passed.shape
+    self._dtype = passed.dtype
   @property
   def condition(self) -> Node: return self.sources[0]
   @property
@@ -373,6 +380,7 @@ class Debug(Node):
   def data(self): return self.sources[0]
 
 def broadcast(left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
+  left, right = Node.to_node(left), Node.to_node(right)
   left_shape, right_shape = left.shape, right.shape
   if left_shape == right_shape: return left, right
   ls, rs = len(left.shape), len(right.shape)

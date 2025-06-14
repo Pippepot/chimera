@@ -78,7 +78,7 @@ base_rewrite = PatternMatcher([
 
 index_collapse_rewrite = PatternMatcher([
     # Propagate indexing down the graph
-    (Pat(Index, name="index", sources=Pat((BinaryOp, Store)), fuzzy_source_match=True), propagate_index),
+    (Pat(Index, name="index", sources=Pat((BinaryOp, Store, Where)), fuzzy_source_match=True), propagate_index),
     (Pat(Index, name="parent", sources=Pat(Index, name="child"), fuzzy_source_match=True), merge_index),
     (Pat(Index, name="index", sources=Pat(Expand, name="expand"), fuzzy_source_match=True), lower_index_expand),
     (Pat(Index, name="index", sources=Pat(Reshape, name="reshape"), fuzzy_source_match=True), lower_index_reshape),
