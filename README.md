@@ -14,6 +14,7 @@ with this goal in mind, a few restrictions are in order:
   I like functional paradigm so I will try to make it work
   Also functions can be parallelized as they are pure, which may be harder to infer from loops
   I want implicit parallelization as default and allow customization if needed
+  Since functions are pure, I can cache results for the same input parameters.
 
 ---
 As noted earlier, chimera is supposed to be used in tandem with another programming language and rarely on its own.

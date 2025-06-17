@@ -1,29 +1,36 @@
 from __future__ import annotations
+from typing import Callable
 from chimera.rewrite import PatternMatcher, Pat, RewriteContext, rewrite_tree, linearize
 from chimera.helpers import DEBUG, prod
 from chimera.nodes import *
 
-def refactor_debug(ctx:RewriteContext, x:Debug) -> Var:
+def refactor_debug(x:Debug) -> Var:
   var = Var(Reshape(Allocate(prod(x.data.shape, Const(1)), x.data.dtype), x.data.shape), "dbg")
-  ctx.pre[x] = Assign(var)
-  ctx.post[x] = Debug(var)
-  ctx.post[x.data] = Free(var)
-  return create_loop(Store(var, x.data))
+  return Group(Assign(var), create_loop_with_index(Store(var, x.data)), Debug(var), Free(var))
+
+def lower_reduce(reduce:Reduce):
+  acc = Var(Reshape(Allocate(prod(reduce.shape, Const(1)), reduce.dtype), reduce.shape), "acc")
+  return Group(Assign(acc), create_loop(lambda i: Store(acc, acc + Call(reduce.function, (acc, Index(reduce.value, i)))), reduce.shape))
 
 def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   sources = list(parent.sources)
+  assignments = []
   for i,arr in enumerate(sources): 
     if not isinstance(arr, Array): continue
-    if arr not in ctx.pre:
-      var = Var(arr, "arr")
-      ctx.pre[arr] = Assign(var)
-    sources[i] = ctx.pre[arr].var
-  return None if sources == list(parent.sources) else parent.copy(sources)
+    if arr in ctx.variables:
+      sources[i] = ctx.variables[arr]
+      continue
+    ctx.variables[arr] = (var := Var(arr, "arr"))
+    assignments.append(Assign(var))
 
-def create_loop(node:Node) -> Loop:
-  indices = [Var(0, f"idx") for _ in range(len(node.shape))]
-  shape = node.shape
-  node = Index(node, indices)
+  if sources == list(parent.sources): return None
+  return Group(*assignments, parent.copy(sources)) if assignments else parent.copy(sources)
+
+def create_loop_with_index(node:Node):
+  return create_loop(lambda indices: Index(node, indices), node.shape)
+def create_loop(create_node:Callable[[tuple[Var]], Node], shape:tuple) -> Loop:
+  indices = [Var(0, f"idx") for _ in range(len(shape))]
+  node = create_node(indices)
   for idx,dim in zip(reversed(indices), reversed(shape)):
     node = Loop(idx, dim, node)
   return node
@@ -72,6 +79,7 @@ def lower_index_flip(index:Index, flip:Flip):
 base_rewrite = PatternMatcher([
   # Refactor print statements to use malloc/free
   (Pat(Debug, predicate=lambda x: x.data.shape != (), name="x"), refactor_debug),
+  (Pat(Reduce, name="reduce"), lower_reduce),
   # Move array to assignments
   (Pat((BinaryOp, Expand, Reshape, Permute, Flip, Where, Store, Index), name="parent"), assign_array),
 ])

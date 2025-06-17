@@ -81,8 +81,7 @@ class PatternMatcher:
 
 class RewriteContext:
   def __init__(self, track_rewrites=TRACK_REWRITES):
-    self.pre:dict[Node, Node] = {}
-    self.post:dict[Node, Node] = {}
+    self.variables:dict[Node, Var] = {} # Should not be here
     self.position:tuple[int] = ()
     self.tracker:TrackedRewrite|None = TrackedRewrite() if track_rewrites else None
 

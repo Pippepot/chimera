@@ -162,16 +162,16 @@ class Const(Node):
   def __repr__(self): return f"Const {self.value}"
 
 class Var(Node):
-  def __init__(self, data:Allocate|Array|Const, name:str="var"):
+  def __init__(self, data:Function|Allocate|Array|Const|Reshape|Expand, name:str="var"):
     assert data != None, "data should not be none"
     data = Node.to_node(data)
-    assert isinstance(data, (Allocate, Array, Const, Reshape)), f"data is not valid type. {data}"
+    assert isinstance(data, (Function, Allocate, Array, Const, Reshape, Expand)), f"data is not valid type. {data}"
     self._sources = (data,)
     self._shape = self.data.shape
     self._dtype = self.data.dtype
-    self._arg = (name,)
+    self._arg = name
   @property
-  def name(self) -> str: return self._arg[0]
+  def name(self) -> str: return self._arg
   @property
   def data(self) -> Node: return self.sources[0]
   def __repr__(self): return self.name
@@ -332,10 +332,7 @@ class Permute(Node):
 class Flip(Node):
   def __init__(self, node:Node, dims:tuple[int, ...]):
     dims = tupled(dims)
-    assert len(dims) > 0, f"Dims cannot be empty"
-    assert len(dims) == len(set(dims)), f"Dims {dims} need to be unique"
-    assert len(dims) <= len(node.shape), f"Too many dims for shape {node.shape}. Dims: {dims}"
-    assert all(isinstance(d, int) for d in dims), f"Dims need to be all ints. Dims {dims}"
+    assert_unique_dims(dims, node.shape)
     self._sources = (node,)
     self._shape = node.shape
     self._dtype = node.dtype 
@@ -344,6 +341,56 @@ class Flip(Node):
   def node(self) -> Node: return self.sources[0]
   @property
   def dims(self) -> tuple[int]: return self._arg
+
+class Function(Node):
+  def __init__(self, body:Node, args:tuple[Var], name="func"):
+    args = tupled(args)
+    assert all(isinstance(a, Var) for a in args), f"Arguments to function must be Var, found {args}"
+    self._sources = (ensure_return(body), *tupled(args))
+    self._shape = body.shape
+    self._dtype = body.dtype
+    self._arg = name
+  @property
+  def body(self) -> Node: return self.sources[0]
+  @property
+  def args(self) -> tuple[Node]: return self.sources[1:]
+  @property
+  def name(self) -> str: return self._arg
+
+class Return(Node):
+  def __init__(self, value:Node):
+    assert value.dtype != dtypes.void, "Cannot return a statement"
+    self._sources = (value,)
+  @property
+  def value(self) -> Node: return self.sources[0]
+
+class Call(Node):
+  def __init__(self, function:Function, args:tuple[Node]):
+    assert isinstance(function, Function), f"Call has to call a function, found {function}"
+    self._sources = (Var(function, function.name), *tupled(args))
+    self._shape = function.shape
+    self._dtype = function.dtype
+  @property
+  def function(self) -> Node: return self.sources[0]
+  @property
+  def args(self) -> tuple[Node]: return self.sources[1:]
+
+class Reduce(Node):
+  def __init__(self, value:Node, function:Function, dims:tuple[int, ...]):
+    dims = tupled(dims)
+    assert_unique_dims(dims, value.shape)
+    assert function.dtype == value.dtype, f"Function has to return same type as the reduced value\nFunction type: {function.dtype}\nValue type: {value.dtype}"
+    assert len(function.args), f"Function has to have exactly two arguments\nArgs: {function.args}"
+    assert all(value.dtype == a.dtype for a in function.args), f"Both function argument types has to match the value's type\nArg types: {tuple(a.dtype for a in function.args)}\nValue type: {value.dtype}"
+    self._sources = (value, function)
+    self._shape = tuple(s for i, s in enumerate(value.shape) if i not in dims)
+    assert function.shape == self.shape, f"Function shape {function.shape} has to equal shape {self.shape} given value's shape {value.shape} and dims {dims}"
+    self._dtype = value.dtype
+    self._arg = dims
+  @property
+  def value(self) -> Node: return self.sources[0]
+  @property
+  def function(self) -> Node: return self.sources[1]
 
 class Where(Node):
   def __init__(self, condition:Node, passed:Node, failed:Node):
@@ -379,6 +426,15 @@ class Debug(Node):
   @property
   def data(self): return self.sources[0]
 
+class Group(Node):
+  def __init__(self, *nodes:Node):
+    self._sources = tupled(nodes)
+    assert self._sources, "Sources cannot be empty"
+    self._shape = self._sources[-1].shape
+    self._dtype = self._sources[-1].dtype
+  @property
+  def nodes(self) -> tuple[Node]: return self.sources
+
 def broadcast(left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
   left, right = Node.to_node(left), Node.to_node(right)
   left_shape, right_shape = left.shape, right.shape
@@ -394,3 +450,15 @@ def broadcast(left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
   if left_shape != target_shape: left = Expand(left, target_shape)
   if right_shape != target_shape: right = Expand(right, target_shape)
   return left, right
+
+def ensure_return(node:Node) -> Node:
+  # TODO assert all code paths return
+  if isinstance(node, Return): return node
+  if isinstance(node, Group): return ensure_return(node.nodes[-1])
+  return Return(node)
+
+def assert_unique_dims(dims:tuple[int], shape:tuple):
+  assert len(dims) > 0, f"Dims cannot be empty"
+  assert len(dims) == len(set(dims)), f"Dims {dims} need to be unique"
+  assert len(dims) <= len(shape), f"Too many dims for shape {shape}. Dims: {dims}"
+  assert all(isinstance(d, int) for d in dims), f"Dims need to be all ints. Dims {dims}"

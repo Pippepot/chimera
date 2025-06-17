@@ -5,9 +5,9 @@ import tempfile
 def compile(code, functions):
   with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib.c")) as file: lib = file.read()
   libs = f'{lib}\n\n{functions}\n\n'
-  main = f"int main(int argc, char *argv[]) {{\n{code}\n}}"
+  main = f"int main() {{\n{code}\n}}"
   if DEBUG:
-    print(f"\n{code}\n")
+    print(f"{functions}\n{code}\n")
     clang_timer = time.perf_counter()
 
   with tempfile.NamedTemporaryFile(delete=False, suffix='.exe') as exe_file:

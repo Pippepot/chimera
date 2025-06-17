@@ -27,18 +27,22 @@ LOG_SHAPES.value = 0
 
 def main():
   
+  arg = Var(Array([0, 0]))
+  func = Function(arg * 7, arg)
   ast = [
     # Debug((Array([[1,2,3],[4,5,6]]) * Array([2])))
     # Debug(Index(Array([[1,2,3],[4,5,6]]), (1,Slice(0, 2))))
     # Debug(Branch(Const(1) < Const(2), Permute(Reshape(Array([[1,2,3],[4,5,6]]) * 5, (1, 3, 2)), (2, 0, 1)), Const(1))),
     # Debug(Const(1) + 4 << 3),
-    # Debug((Const(1) > Const(3)).where(Array([1,2,3]), Array([4,5,6]))),
+    # Debug((Array([False, True, False])).where(Array([1,2,3]), Array([4]))),
     # Branch(Const(True), Debug(Array([[1,2,3],[4,5,6]]) * 5), Debug(Const(123))),
     # Debug(Reshape(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]), (1,3,1,2)) + 3),
     # Debug(Index(Array([[1,2,3],[4,5,6]]), (1, Slice(0, 3, 1)))),
-    Debug(Reshape(Array([[1,2,3], [4,5,6]]), (1, 3, 2)))
+    # Debug(Reshape(Array([[1,2,3], [4,5,6]]), (1, 3, 2)))
     # Debug(Permute(Array([[[1,2,3], [4,5,6]], [[7,8,9], [10,11,12]]]), (2, 0, 1)))
     # Debug(Index(Expand(Array([[1,2,3],[4,5,6]]), (2, 2, 3)), (1,))),
+    func,
+    Debug(Reduce(Array([[1,2,3],[4,5,6]]), func, 1))
   ]
 
   if DEBUG:

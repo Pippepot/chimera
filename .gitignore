@@ -3,4 +3,5 @@ __pycache__/
 *.exe
 *.bat
 *.vscode
+*.ipynb
 /archive

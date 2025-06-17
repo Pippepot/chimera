@@ -39,18 +39,22 @@ def strip_parens(string:str) -> str: return string[1:-1]
 render_patterns = PatternMatcher([
   (Pat(Const, name='x'), lambda x: f"{x.value}{dtype_suffix(x.dtype)}"),
   (Pat(Array, name='x'), lambda x: render_array(x.data, dtype_suffix(x.dtype))),
-  (Pat(Var, name='x'), lambda ctx, x: f'{x.name}{ctx[x.name]}'),
+  (Pat(Var, name='x'), lambda ctx, x: f"{x.name}{ctx[x.name]}"),
+  (Pat(Function, name='x'), lambda ctx, x: f"{dtype_to_str[x.dtype]} {x.name}{ctx[x.name]}({','.join(dtype_to_str[arg.dtype]+' '+ctx[arg] for arg in x.args)}) {{\n{append_indent(ctx[x.body])}\n}}"),
+  (Pat(Return, name='x'), lambda ctx, x: f"return {ctx[x]};"),
+  (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.function]}({','.join(ctx[arg] for arg in x.args)})"),
   (Pat(Assign, name='x'), render_assign),
   (Pat(Store, name='x'), lambda ctx, x: f"{ctx[x.data]} = {ctx[x.value]};"),
   (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({ctx[x.size]})"),
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]});"),
+  (Pat(Group, name='x'), lambda ctx, x: '\n'.join(ctx[n] for n in x.nodes)),
   (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n{append_indent(ctx[x.scope])}\n}}"),
   (Pat(Where, name='x'), lambda ctx, x: f"({ctx[x.condition]}?{ctx[x.passed]}:{ctx[x.failed]})"),
   (Pat(Branch, name='x'), lambda ctx, x: f"if ({ctx[x.condition]}) {{\n{append_indent(ctx[x.passed])}\n}}" + ("" if x.failed == None else f"\nelse {{\n{append_indent(ctx[x.failed])}\n}}")),
-  (Pat(Reshape, name='x'), lambda ctx, x: ctx[x.node]),
+  (Pat((Reshape, Expand), name='x'), lambda ctx, x: ctx[x.node]),
   (Pat(Load, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),
   (Pat(Debug, sources=Pat(Var, name='x')),
-   lambda ctx, x: f'puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, (int[]){render_array(ctx[s] for s in x.shape)}, {len(x.shape)}, {x.dtype.fmt}_fmt));'),
+   lambda ctx, x: f"puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, (int[]){render_array(ctx[s] for s in x.shape)}, {len(x.shape)}, {x.dtype.fmt}_fmt));"),
   (Pat(Debug, sources=Pat(Node, name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
   (Pat(BinaryOp, name='x'), lambda ctx, x: op_rendering[x.op](
     *[strip_parens(ctx[source]) if isinstance(source, BinaryOp) and source.op == x.op and x.op in NodeGroup.Associative else ctx[source] for source in x.sources]
@@ -69,15 +73,17 @@ def render(procedure:set[Node]):
   functions = []
   non_terminal = set()
   terminal = {}
+  # TODO refactor TRACK_REWRITES logic and rewriting into rewrite.py
   tracker:list[tuple[Pat, Node, str]] = [] if TRACK_REWRITES else None
   for node in procedure:
-    if isinstance(node, Var):
+    if isinstance(node, Function) or (isinstance(node, Var) and not isinstance(node.data, Function)):
       ctx[node.name] = ctx.get(node.name, -1) + 1
     rewrite, pattern = render_patterns.rewrite(node, ctx)
     if TRACK_REWRITES: tracker.append((pattern, node, rewrite))
     if rewrite is None:
       print("RENDER: Failed to parse", node)
       continue
+    if isinstance(node, Function): functions.append(rewrite)
     ctx[node] = rewrite
     non_terminal.union(node.sources, node.shape)
     for n in node.sources + node.shape:
