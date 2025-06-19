@@ -47,13 +47,12 @@ render_patterns = PatternMatcher([
   (Pat(Store, name='x'), lambda ctx, x: f"{ctx[x.data]} = {ctx[x.value]};"),
   (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({ctx[x.size]})"),
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]});"),
-  (Pat(Group, name='x'), lambda ctx, x: '\n'.join(ctx[n] for n in x.nodes)),
   (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n{append_indent(ctx[x.scope])}\n}}"),
   (Pat(Where, name='x'), lambda ctx, x: f"({ctx[x.condition]}?{ctx[x.passed]}:{ctx[x.failed]})"),
   (Pat(Branch, name='x'), lambda ctx, x: f"if ({ctx[x.condition]}) {{\n{append_indent(ctx[x.passed])}\n}}" + ("" if x.failed == None else f"\nelse {{\n{append_indent(ctx[x.failed])}\n}}")),
   (Pat((Reshape, Expand), name='x'), lambda ctx, x: ctx[x.node]),
   (Pat(Load, name='x'), lambda ctx, x: f"*({ctx[x.data]} + {strip_parens(ctx[x.indexer]) if x.indexer._arg == '+' else ctx[x.indexer]})"),
-  (Pat(Debug, sources=Pat(Var, name='x')),
+  (Pat(Debug, sources=Pat(Node, name='x', predicate=lambda x: x.shape != ())),
    lambda ctx, x: f"puts(array_to_string({ctx[x]}, {x.dtype.itemsize}, (int[]){render_array(ctx[s] for s in x.shape)}, {len(x.shape)}, {x.dtype.fmt}_fmt));"),
   (Pat(Debug, sources=Pat(Node, name='x')), lambda ctx, x: f'printf("%{x.dtype.fmt}\\n", {ctx[x]});'),
   (Pat(BinaryOp, name='x'), lambda ctx, x: op_rendering[x.op](
@@ -78,6 +77,13 @@ def render(procedure:set[Node]):
   for node in procedure:
     if isinstance(node, Function) or (isinstance(node, Var) and not isinstance(node.data, Function)):
       ctx[node.name] = ctx.get(node.name, -1) + 1
+    if isinstance(node, Block):
+      for src in node.sources[:-1]: terminal[src] = None
+      if node.expression in terminal: del terminal[node.expression]
+      ctx[node] = ctx[node.expression]
+      terminal[node] = None
+      continue
+
     rewrite, pattern = render_patterns.rewrite(node, ctx)
     if TRACK_REWRITES: tracker.append((pattern, node, rewrite))
     if rewrite is None:
@@ -88,7 +94,8 @@ def render(procedure:set[Node]):
     non_terminal.union(node.sources, node.shape)
     for n in node.sources + node.shape:
       if n in terminal: del terminal[n]
-    if node not in non_terminal: terminal[node] = None
+    if node not in non_terminal:
+      terminal[node] = None
   
   if TRACK_REWRITES: print_tracked_rewrites(tracker)
   return '\n'.join(append_indent(ctx[x]) for x in terminal), '\n\n'.join(functions)

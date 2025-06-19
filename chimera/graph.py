@@ -4,13 +4,17 @@ from chimera.rewrite import PatternMatcher, Pat, RewriteContext, rewrite_tree, l
 from chimera.helpers import DEBUG, prod
 from chimera.nodes import *
 
-def refactor_debug(x:Debug) -> Var:
+def refactor_debug(x:Debug) -> Block:
   var = Var(Reshape(Allocate(prod(x.data.shape, Const(1)), x.data.dtype), x.data.shape), "dbg")
-  return Group(Assign(var), create_loop_with_index(Store(var, x.data)), Debug(var), Free(var))
+  return Block(Assign(var), create_loop_with_index(Store(var, x.data)), Debug(var), Free(var))
 
-def lower_reduce(reduce:Reduce):
+def lower_reduce(reduce:Reduce) -> Block:
   acc = Var(Reshape(Allocate(prod(reduce.shape, Const(1)), reduce.dtype), reduce.shape), "acc")
-  return Group(Assign(acc), create_loop(lambda i: Store(acc, acc + Call(reduce.function, (acc, Index(reduce.value, i)))), reduce.shape))
+  return Block(Assign(acc), create_loop(lambda i: Store(acc, acc + Call(reduce.function, (acc, Index(reduce.value, i)))), reduce.shape))
+
+def lower(x:Node):
+  var = Var(Reshape(Allocate(prod(x.shape, Const(1)), x.dtype), x.shape), "temp")
+  return Block(Assign(var), create_loop_with_index(Store(var, x)), var)
 
 def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   sources = list(parent.sources)
@@ -22,9 +26,10 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
       continue
     ctx.variables[arr] = (var := Var(arr, "arr"))
     assignments.append(Assign(var))
+    sources[i] = var
 
   if sources == list(parent.sources): return None
-  return Group(*assignments, parent.copy(sources)) if assignments else parent.copy(sources)
+  return Block(*assignments, parent.copy(sources)) if assignments else parent.copy(sources)
 
 def create_loop_with_index(node:Node):
   return create_loop(lambda indices: Index(node, indices), node.shape)
@@ -77,11 +82,8 @@ def lower_index_flip(index:Index, flip:Flip):
   return Index(flip.node, tuple((flip.shape[i] - Const(1)) - idx if i in flip.dims else idx for i,idx in enumerate(index.indices)))
 
 base_rewrite = PatternMatcher([
-  # Refactor print statements to use malloc/free
-  (Pat(Debug, predicate=lambda x: x.data.shape != (), name="x"), refactor_debug),
-  (Pat(Reduce, name="reduce"), lower_reduce),
   # Move array to assignments
-  (Pat((BinaryOp, Expand, Reshape, Permute, Flip, Where, Store, Index), name="parent"), assign_array),
+  (Pat((BinaryOp, Expand, Reshape, Permute, Flip, Where, Store, Index, Debug), name="parent"), assign_array),
 ])
 
 index_collapse_rewrite = PatternMatcher([
@@ -92,13 +94,16 @@ index_collapse_rewrite = PatternMatcher([
     (Pat(Index, name="index", sources=Pat(Reshape, name="reshape"), fuzzy_source_match=True), lower_index_reshape),
     (Pat(Index, name="index", sources=Pat(Permute, name="permute"), fuzzy_source_match=True), lower_index_permute),
     (Pat(Index, name="index", sources=Pat(Flip, name="flip"), fuzzy_source_match=True), lower_index_flip),
+    (Pat(Index, name="index", sources=Pat(Block, name="block"), fuzzy_source_match=True),
+     lambda index, block: Block(*block.sources[:-1], Index(block.sources[-1], index.indices))),
+
+    (Pat((Index, BinaryOp, Expand, Permute, Flip, Where), predicate=lambda x: x.shape != (), name="x"), lower),
     (Pat(Index, name="index", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda index, var: Load(var, index.indices)),
 ])
 
 def apply_rewrite_passes(graph:Node) -> Node:
   # Base rewrite
-  graph = rewrite_tree(graph, base_rewrite, (context:=RewriteContext()))
-  graph = Program(tuple(context.pre.values()) + graph.sources + tuple(context.post.values()))
+  graph = rewrite_tree(graph, base_rewrite, RewriteContext())
 
   # Index collapse rewrite
   graph = rewrite_tree(graph, index_collapse_rewrite)
@@ -108,7 +113,7 @@ def apply_rewrite_passes(graph:Node) -> Node:
   return graph
 
 def parse_ast(ast:list[Node]|Node) -> tuple[Node]:
-  if not isinstance(ast, Program): ast = Program(ast)
+  if isinstance(ast, list): ast = Block(*ast)
   if DEBUG:
     print("GRAPH")
     ast.print_tree()

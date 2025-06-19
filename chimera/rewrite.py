@@ -156,13 +156,19 @@ def linearize(ast:Node) -> tuple[Node]:
     if node in visited: return
     for dim in node.shape:
       _get_children_dfs(dim, visited)
-    for source in node.sources:
-      _get_children_dfs(source, visited)
+    if isinstance(node, Block): # TODO refactor stupid code
+      for source in node.sources:
+        _get_children_dfs(source, visited)
+        visited[source] = None
+    else:
+      for source in node.sources:
+        _get_children_dfs(source, visited)
+      visited.update(dict.fromkeys(node.sources, None))
     visited.update(dict.fromkeys(node.shape, None))
-    visited.update(dict.fromkeys(node.sources, None))
 
   visited:dict[Node, None] = {}
   _get_children_dfs(ast, visited)
+  visited[ast] = None
   visited = tuple(visited)
   if DEBUG >= 2: print_procedure(visited)
   return visited

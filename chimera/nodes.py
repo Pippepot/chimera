@@ -148,10 +148,6 @@ class Node(metaclass=NodeMetaClass):
     cond, failed = broadcast(cond, failed)
     return Where(cond, passed, failed)
 
-class Program(Node):
-  def __init__(self, nodes:list[Node]|Node):
-    self._sources = tupled(nodes)
-
 class Const(Node):
   def __init__(self, value):
     assert isinstance(value, (int, float, bool)), f"Const node can only have values of type int, float, bool. Type was {type(value)}. {value}"
@@ -426,14 +422,14 @@ class Debug(Node):
   @property
   def data(self): return self.sources[0]
 
-class Group(Node):
-  def __init__(self, *nodes:Node):
-    self._sources = tupled(nodes)
+class Block(Node):
+  def __init__(self, *sources:Node):
+    self._sources = tupled(sources)
     assert self._sources, "Sources cannot be empty"
-    self._shape = self._sources[-1].shape
-    self._dtype = self._sources[-1].dtype
+    self._shape = self.expression.shape
+    self._dtype = self.expression.dtype
   @property
-  def nodes(self) -> tuple[Node]: return self.sources
+  def expression(self) -> Node: return self.sources[-1]
 
 def broadcast(left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
   left, right = Node.to_node(left), Node.to_node(right)
@@ -454,7 +450,7 @@ def broadcast(left:Node, right:Node) -> tuple[Node, Node, tuple[int, ...]]:
 def ensure_return(node:Node) -> Node:
   # TODO assert all code paths return
   if isinstance(node, Return): return node
-  if isinstance(node, Group): return ensure_return(node.nodes[-1])
+  if isinstance(node, Block): return ensure_return(node.nodes[-1])
   return Return(node)
 
 def assert_unique_dims(dims:tuple[int], shape:tuple):
