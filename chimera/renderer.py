@@ -18,7 +18,7 @@ op_rendering: dict = {
 
 class NodeGroup:
   Associative = {'+', '*'}
-  Terminal = {Debug, Loop}
+  Terminal = {Debug, Range}
 
 class TypeGroup:
   Number = {dtypes.int, dtypes.int}
@@ -40,14 +40,14 @@ render_patterns = PatternMatcher([
   (Pat(Const, name='x'), lambda x: f"{x.value}{dtype_suffix(x.dtype)}"),
   (Pat(Array, name='x'), lambda x: render_array(x.data, dtype_suffix(x.dtype))),
   (Pat(Var, name='x'), lambda ctx, x: f"{x.name}{ctx[x.name]}"),
-  (Pat(Function, name='x'), lambda ctx, x: f"{dtype_to_str[x.dtype]} {x.name}{ctx[x.name]}({','.join(dtype_to_str[arg.dtype]+' '+ctx[arg] for arg in x.args)}) {{\n{append_indent(ctx[x.body])}\n}}"),
-  (Pat(Return, name='x'), lambda ctx, x: f"return {ctx[x]};"),
+  (Pat(Function, name='x'), lambda ctx, x: f"{dtype_to_str[x.dtype]} {x.name}{ctx[x.name]}({','.join(dtype_to_str[arg.dtype]+' '+ctx[arg] for arg in x.args)})"),
+  (Pat(Return, name='x'), lambda ctx, x: f"return {ctx[x.value]};"),
   (Pat(Call, name='x'), lambda ctx, x: f"{ctx[x.function]}({','.join(ctx[arg] for arg in x.args)})"),
   (Pat(Assign, name='x'), render_assign),
   (Pat(Store, name='x'), lambda ctx, x: f"{ctx[x.data]} = {ctx[x.value]};"),
   (Pat(Allocate, name='x'), lambda ctx, x: f"malloc({ctx[x.size]})"),
   (Pat(Free, name='x'), lambda ctx, x: f"free({ctx[x.var]});"),
-  (Pat(Loop, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++) {{\n{append_indent(ctx[x.scope])}\n}}"),
+  (Pat(Range, name='x'), lambda ctx, x: f"for ({ctx[x.assign]} {ctx[x.idx]} < {ctx[x.stop]}; {ctx[x.idx]}++)"),
   (Pat(Where, name='x'), lambda ctx, x: f"({ctx[x.condition]}?{ctx[x.passed]}:{ctx[x.failed]})"),
   (Pat(Branch, name='x'), lambda ctx, x: f"if ({ctx[x.condition]}) {{\n{append_indent(ctx[x.passed])}\n}}" + ("" if x.failed == None else f"\nelse {{\n{append_indent(ctx[x.failed])}\n}}")),
   (Pat((Reshape, Expand), name='x'), lambda ctx, x: ctx[x.node]),
@@ -72,30 +72,51 @@ def render(procedure:set[Node]):
   functions = []
   non_terminal = set()
   terminal = {}
+  scope:list[list[Node]] = [[]]
   # TODO refactor TRACK_REWRITES logic and rewriting into rewrite.py
   tracker:list[tuple[Pat, Node, str]] = [] if TRACK_REWRITES else None
   for node in procedure:
     if isinstance(node, Function) or (isinstance(node, Var) and not isinstance(node.data, Function)):
       ctx[node.name] = ctx.get(node.name, -1) + 1
     if isinstance(node, Block):
-      for src in node.sources[:-1]: terminal[src] = None
+      for src in node.sources[:-1]:
+        terminal[src] = None
+        scope[-1].append(src)
       if node.expression in terminal: del terminal[node.expression]
       ctx[node] = ctx[node.expression]
       terminal[node] = None
+      scope[-1].append(node)
       continue
 
+    if isinstance(node, ScopeBegin):
+      scope.append([])
+      continue
+      
     rewrite, pattern = render_patterns.rewrite(node, ctx)
     if TRACK_REWRITES: tracker.append((pattern, node, rewrite))
     if rewrite is None:
       print("RENDER: Failed to parse", node)
       continue
-    if isinstance(node, Function): functions.append(rewrite)
+    # if isinstance(node, Function): functions.append(rewrite)
     ctx[node] = rewrite
+
+
     non_terminal.union(node.sources, node.shape)
     for n in node.sources + node.shape:
-      if n in terminal: del terminal[n]
+      if n in terminal:
+        scope[-1] = [x for x in scope[-1] if x != n]
+        del terminal[n]
+
+    if isinstance(node, (Function, Range)):
+      body = scope.pop()
+      ctx[node] += " {\n" + append_indent('\n'.join(ctx[x] for x in body)) + "\n}"
+      print("DESCOPE", ctx[node])
+      non_terminal.union(body)
+      
     if node not in non_terminal:
       terminal[node] = None
+      scope[-1].append(node)
+
   
   if TRACK_REWRITES: print_tracked_rewrites(tracker)
-  return '\n'.join(append_indent(ctx[x]) for x in terminal), '\n\n'.join(functions)
+  return append_indent('\n'.join(ctx[x] for x in terminal)), '\n\n'.join(functions)

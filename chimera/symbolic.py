@@ -32,7 +32,7 @@ symbolic = PatternMatcher([
   (Pat.cvar("x1") + Pat.var("x2"), lambda x1,x2: x2 + x1),
   (Pat.cvar("x1") * Pat.var("x2"), lambda x1,x2: x2 * x1),
 
-  (Pat(Loop, predicate=lambda x: isinstance(x.idx.data, Const) and isinstance(x.stop, Const) and x.stop.value - x.idx.data.value == 1, name="x"),
+  (Pat(Range, predicate=lambda x: isinstance(x.idx.data, Const) and isinstance(x.stop, Const) and x.stop.value - x.idx.data.value == 1, name="x"),
    lambda x: x.scope),
 
   (Pat.var("x") + 0, lambda x: x), # x+0 -> x
@@ -42,4 +42,8 @@ symbolic = PatternMatcher([
 
   (Pat.var("y") / Pat.var("x") * Pat.var("x"), lambda y, x: y), # (y/x)*x -> y
   (Pat.var("y") * Pat.var("x") / Pat.var("x"), lambda y, x: y), # (y*x)/x -> y
+
+  (Pat(Where, sources=(Pat(Const, name="c"), Pat(name="x"), Pat(name="y"))), lambda c,x,y: x if c.value != 0 else y),
+  (Pat(Block, name="block", predicate=lambda x: any(isinstance(src, Block) for src in x.sources)),
+   lambda block: Block(*tuple(x for src in block.sources for x in (src.sources if isinstance(src, Block) else [src]))))
 ])

@@ -3,7 +3,7 @@ from chimera.dtype import DType, dtypes
 from chimera.helpers import LOG_SHAPES, fully_flatten, get_shape, all_same, listed, tupled
 from dataclasses import dataclass
 from enum import auto, IntEnum, Enum
-import weakref, functools
+import weakref, functools, math
 
 class Ops(IntEnum):
   # Unary ops
@@ -26,7 +26,7 @@ class NodeMetaClass(type):
   @classmethod
   def register(cls, node:Node) -> Node:
     key = (type(node), node._sources, node._arg, node._dtype, node._shape)
-    if not isinstance(node, Var) \
+    if not isinstance(node, (Var, ScopeBegin, ScopeEnd)) \
        and (wret := NodeMetaClass.node_cache.get(key, None)) is not None \
        and (ret := wret()) is not None:
       return ret
@@ -61,7 +61,7 @@ class Node(metaclass=NodeMetaClass):
     if var_count is None: var_count = []
     if visited is None: visited = set()
     if format_func is None: format_func = lambda x: x.__repr__()
-    string = self.__repr__() + "\n"
+    string = self.__repr__() + f" shape={self.shape}\n" if LOG_SHAPES else "\n"
     for i, source in enumerate(self.sources): string += source._get_print_tree(visited, var_count, format_func, i == len(self.sources) - 1)
     return string
   def _get_print_tree(self, visited:set[Node], var_count:list[Node], format_func:callable[str, Node], is_last:bool, indent:str = ''):
@@ -148,6 +148,11 @@ class Node(metaclass=NodeMetaClass):
     cond, failed = broadcast(cond, failed)
     return Where(cond, passed, failed)
 
+class ScopeBegin(Node):
+  def __init__(self): pass
+class ScopeEnd(Node):
+  def __init__(self): pass
+
 class Const(Node):
   def __init__(self, value):
     assert isinstance(value, (int, float, bool)), f"Const node can only have values of type int, float, bool. Type was {type(value)}. {value}"
@@ -172,16 +177,10 @@ class Var(Node):
   def data(self) -> Node: return self.sources[0]
   def __repr__(self): return self.name
 
-class Assign(Node):
-  def __init__(self, var:Var):
-    self._sources = (var,)
-  @property
-  def var(self) -> Var: return self.sources[0]
-
 class Allocate(Node):
   def __init__(self, shape:Node, dtype:DType):
     shape = shape.simplify()
-    self._sources = (shape * dtype.itemsize,)
+    self._sources = ((shape * dtype.itemsize).simplify(),)
     self._shape = (shape,)
     self._dtype = dtype
   @property
@@ -217,8 +216,10 @@ class Slice(Node):
   def __init__(self, begin:int|Const, end:int|Const, step:int|Const=Const(1)):
     begin, end, step = Node.to_node(begin), Node.to_node(end), Node.to_node(step)
     assert type(begin) == type(end) == type(step) == Const, f"Arguments has to be const.\nBegin: {begin}\End: {end}\Step: {step}"
+    assert step != 0, "Step cannot be 0"
+    assert math.copysign(step.value, end.value) == step.value, "Step and end cannot have different signs"
     self._sources = (begin, end, step)
-    self._arg = (end - begin + step - 1) / step # Negative (end - begin - step - 1) / (-step)
+    self._arg = (step > 0).where((end - begin + step - 1) / step, (end - begin - step - 1) / (-step)).simplify()
   @property
   def begin(self) -> Const: return self._sources[0]
   @property
@@ -250,30 +251,21 @@ class Index(Node):
 
 class Load(Node):
   def __init__(self, data:Var, indices:int|Const|list[int|Const]):
-    assert isinstance(data, Var), "Only variables can be loaded"
+    assert isinstance(data, (Var, Call)), "Only variables can be loaded"
     assert len(data.strides) == len(indices), f"Indices has to match data shape.\nIndices: {indices}\nStrides: {data.strides}\nNode: {data}"
     indexer = Const(0)
     for idx, stride in zip(indices, data.strides):
       indexer = indexer + idx * stride
-    self._sources = (data, indexer)
+    self._sources = (data, indexer.simplify())
   @property
   def data(self) -> Node: return self.sources[0]
   @property
   def indexer(self) -> Node: return self.sources[1]
 
-class Loop(Node):
-  def __init__(self, start:Var|Const, stop:Const, scope:Node):
-    if not isinstance(start, Var): start = Var(Node.to_node(start), "idx")
-    self._sources = (Assign(start), Node.to_node(stop), scope)
-    self._shape = scope.shape
-  @property
-  def assign(self) -> Assign: return self.sources[0]
-  @property
-  def idx(self) -> Var: return self.assign.var
-  @property
+class Range(Node):
+  def __init__(self, stop:Const|Var):
+    self._sources = (stop,)
   def stop(self) -> Const: return self.sources[1]
-  @property
-  def scope(self) -> Node: return self.sources[2]
 
 class BinaryOp(Node):
   def __init__(self, op:Ops, left:Node, right:Node):
@@ -339,15 +331,11 @@ class Flip(Node):
   def dims(self) -> tuple[int]: return self._arg
 
 class Function(Node):
-  def __init__(self, body:Node, args:tuple[Var], name="func"):
+  def __init__(self, args:tuple[Var], name="func"):
     args = tupled(args)
     assert all(isinstance(a, Var) for a in args), f"Arguments to function must be Var, found {args}"
-    self._sources = (ensure_return(body), *tupled(args))
-    self._shape = body.shape
-    self._dtype = body.dtype
+    self._sources = args
     self._arg = name
-  @property
-  def body(self) -> Node: return self.sources[0]
   @property
   def args(self) -> tuple[Node]: return self.sources[1:]
   @property

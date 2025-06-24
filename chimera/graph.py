@@ -4,17 +4,18 @@ from chimera.rewrite import PatternMatcher, Pat, RewriteContext, rewrite_tree, l
 from chimera.helpers import DEBUG, prod
 from chimera.nodes import *
 
-def refactor_debug(x:Debug) -> Block:
-  var = Var(Reshape(Allocate(prod(x.data.shape, Const(1)), x.data.dtype), x.data.shape), "dbg")
-  return Block(Assign(var), create_loop_with_index(Store(var, x.data)), Debug(var), Free(var))
+def create_buffer(node:Node, name:str) -> Var:
+  buffer = Allocate(prod(node.shape, Const(1)), node.dtype)
+  if buffer.shape != node.shape: buffer = Reshape(buffer, node.shape)
+  return Var(buffer, name)
+
+def lower(x:Node) -> Block:
+  var = create_buffer(x, "tmp")
+  return Block(Assign(var), create_loop_with_index(Store(var, x)), var)
 
 def lower_reduce(reduce:Reduce) -> Block:
-  acc = Var(Reshape(Allocate(prod(reduce.shape, Const(1)), reduce.dtype), reduce.shape), "acc")
-  return Block(Assign(acc), create_loop(lambda i: Store(acc, acc + Call(reduce.function, (acc, Index(reduce.value, i)))), reduce.shape))
-
-def lower(x:Node):
-  var = Var(Reshape(Allocate(prod(x.shape, Const(1)), x.dtype), x.shape), "temp")
-  return Block(Assign(var), create_loop_with_index(Store(var, x)), var)
+  acc = create_buffer(reduce, "acc")
+  return Block(Assign(acc), create_loop(lambda i: Store(Index(acc, i), Index(acc, i) + Index(Call(reduce.function, (acc, reduce.value)), i)), reduce.shape))
 
 def assign_array(ctx:RewriteContext, parent:Node) -> Node:
   sources = list(parent.sources)
@@ -33,11 +34,11 @@ def assign_array(ctx:RewriteContext, parent:Node) -> Node:
 
 def create_loop_with_index(node:Node):
   return create_loop(lambda indices: Index(node, indices), node.shape)
-def create_loop(create_node:Callable[[tuple[Var]], Node], shape:tuple) -> Loop:
+def create_loop(create_node:Callable[[tuple[Var]], Node], shape:tuple) -> Range:
   indices = [Var(0, f"idx") for _ in range(len(shape))]
   node = create_node(indices)
   for idx,dim in zip(reversed(indices), reversed(shape)):
-    node = Loop(idx, dim, node)
+    node = Range(idx, dim, node)
   return node
 
 def propagate_index(index:Index) -> Node:
@@ -48,15 +49,11 @@ def merge_index(parent:Index, child:Index):
   merged_indices:list[Node] = []
   parent_index = 0
   for i in child.indices:
-    assert isinstance(i, (Const, Slice, Var)), f"Invalid index type: {type(i).__name__}, value: {i}"
-    if isinstance(i, Const) or parent_index == len(parent.indices):
-      merged_indices.append(i)
-      continue
-    elif isinstance(i, Slice):
+    assert isinstance(i, (Const, Slice, Var, BinaryOp)), f"Invalid index type: {type(i).__name__}, value: {i}"
+    if isinstance(i, Slice) and parent_index < len(parent.indices):
       merged_indices.append((parent.indices[parent_index] * i.step + i.begin))
-    elif isinstance(i, Var):
-      merged_indices.append(parent.indices[parent_index] * i)
-    parent_index += 1
+      parent_index += 1
+    merged_indices.append(i)
   for i in range(parent_index, min(len(parent.indices), len(child.indices) + len(child.shape))):
     merged_indices.append(parent.indices[i])
   return Index(child.data, merged_indices) if merged_indices else child.data
@@ -83,7 +80,7 @@ def lower_index_flip(index:Index, flip:Flip):
 
 base_rewrite = PatternMatcher([
   # Move array to assignments
-  (Pat((BinaryOp, Expand, Reshape, Permute, Flip, Where, Store, Index, Debug), name="parent"), assign_array),
+  (Pat((BinaryOp, Reduce, Expand, Reshape, Permute, Flip, Where, Store, Index, Debug), name="parent"), assign_array),
 ])
 
 index_collapse_rewrite = PatternMatcher([
@@ -98,7 +95,8 @@ index_collapse_rewrite = PatternMatcher([
      lambda index, block: Block(*block.sources[:-1], Index(block.sources[-1], index.indices))),
 
     (Pat((Index, BinaryOp, Expand, Permute, Flip, Where), predicate=lambda x: x.shape != (), name="x"), lower),
-    (Pat(Index, name="index", sources=Pat(Var, name="var"), fuzzy_source_match=True), lambda index, var: Load(var, index.indices)),
+    (Pat(Reduce, name="reduce"), lower_reduce),
+    (Pat(Index, name="index", sources=Pat((Var, Call), name="var"), fuzzy_source_match=True), lambda index, var: Load(var, index.indices)),
 ])
 
 def apply_rewrite_passes(graph:Node) -> Node:
@@ -114,13 +112,7 @@ def apply_rewrite_passes(graph:Node) -> Node:
 
 def parse_ast(ast:list[Node]|Node) -> tuple[Node]:
   if isinstance(ast, list): ast = Block(*ast)
-  if DEBUG:
-    print("GRAPH")
-    ast.print_tree()
-
+  if DEBUG: print(f"GRAPH\n{ast.get_print_tree()}")
   ast = apply_rewrite_passes(ast)
-
-  if DEBUG >= 2:
-    print("LOWERED GRAPH")
-    ast.print_tree()
+  if DEBUG >= 2: print(f"LOWERED GRAPH\n{ast.get_print_tree()}")
   return linearize(ast)

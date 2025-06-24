@@ -23,18 +23,18 @@ Graph features:
 DEBUG.value = 2
 TRACK_REWRITES.value = 0
 LOG_REWRITE_FAILURES.value = 1
-LOG_SHAPES.value = 0
+LOG_SHAPES.value = 1
 
 def main():
-  
+
   # arg = Var(Array([0, 0]))
   # func = Function(arg * 7, arg)
   ast = [
-    # Array([[1,2,3],[4,5,6]]) + 60
+    Debug(Array([[1,2,3],[4,5,6]]) + 60)
     # Debug((Array([[1,2,3],[4,5,6]]) + 60))
     # Debug(Array([[1,2,3],[4,5,6]]) * Array([5,2,10]))
     # Debug(Array([True, False, True]).where(Array([1,2,3]), Array([10])))
-    Debug(Index(Array([[1,2,3],[4,5,6]]), (1,Slice(0, 2))))
+    # Debug(Index(Array([[1,2,3],[4,5,6]]), (1,Slice(0, 2))))
     # Debug(Branch(Const(1) < Const(2), Permute(Reshape(Array([[1,2,3],[4,5,6]]) * 5, (1, 3, 2)), (2, 0, 1)), Const(1))),
     # Debug(Const(1) + 4 << 3),
     # Debug((Array([False, True, False])).where(Array([1,2,3]), Array([4]))),

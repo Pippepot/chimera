@@ -127,8 +127,9 @@ def rewrite_tree(root:Node, rewriter:PatternMatcher, ctx:RewriteContext=None, tr
     if stage == 0:
       while new_n is not None:
         last_n, new_n, pattern = new_n, *rewriter.rewrite(new_n, ctx)
-        if new_n == last_n: break
-        if ctx.tracker is not None and new_n is not None:
+        if new_n == last_n or new_n == None: break
+        new_n.print_tree()
+        if ctx.tracker is not None:
           ctx.tracker.track_step(pattern, new_n, position)
       new_n = last_n
       stack.append((n, 1, new_n, position))
@@ -154,17 +155,16 @@ def print_procedure(nodes:list[Node]):
 def linearize(ast:Node) -> tuple[Node]:
   def _get_children_dfs(node:Node, visited:dict[Node, None]):
     if node in visited: return
-    for dim in node.shape:
-      _get_children_dfs(dim, visited)
-    if isinstance(node, Block): # TODO refactor stupid code
-      for source in node.sources:
-        _get_children_dfs(source, visited)
-        visited[source] = None
-    else:
-      for source in node.sources:
-        _get_children_dfs(source, visited)
-      visited.update(dict.fromkeys(node.sources, None))
+    for dim in node.shape: _get_children_dfs(dim, visited)
     visited.update(dict.fromkeys(node.shape, None))
+
+    if (scoped := isinstance(node, (Function, Range))):
+      visited[ScopeBegin()] = None
+      print(node)
+    for source in node.sources:
+      _get_children_dfs(source, visited)
+      if isinstance(node, Block): visited[source] = None
+    visited.update(dict.fromkeys(node.sources, None))
 
   visited:dict[Node, None] = {}
   _get_children_dfs(ast, visited)

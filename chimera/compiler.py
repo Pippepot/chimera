@@ -14,7 +14,7 @@ def compile(code, functions):
     exe_path = exe_file.name
 
   try:
-    process = subprocess.run(['clang', '-O3', '-Wall', '-Werror', '-x', 'c', '-', '-o', exe_path],input=f'{libs}{main}'.encode('utf-8'))
+    process = subprocess.run(['clang', '-O2', '-Wall', '-Werror', '-x', 'c', '-', '-o', exe_path],input=f'{libs}{main}'.encode('utf-8'))
     if DEBUG:
       print(f"Clang compile\t{(time.perf_counter() - clang_timer) * 1000:.1f}ms")
       runtime_timer = time.perf_counter()
